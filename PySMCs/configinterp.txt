@@ -1,0 +1,9 @@
+{ 'action': 'interpolate',
+  'bathyfile': '../Bathys/Bathy042_033.nc',
+  'dxlon': 0.0439453125, 
+  'dylat': 0.0333333333,
+  'depthmin': 0.0,
+  'extents': None,
+  'region': None,
+  'workdir': '../tmpfls/' } 
+
