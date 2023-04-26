@@ -1,0 +1,10 @@
+ 'SMCHfd'
+ '/data/users/frjl/MFTModel/Shalwhfd/DatGMC/'
+ 186000  196000  1  66310  # NCL,  NFC,  MRL,  Itrm 
+ 512     360     2    4    # NLon, NLat, NPol, Init
+ 23040   720     8   160   # NTS,  NWP,  NHrg, NLrg
+ 0.0  0.0  0.703125    0.500     # ZLon, ZLat, DLon, DLat
+ 30.0   30.0   3.0E5   0.0       # DTG,  DT,   AHK,  GmDT
+ -180.0  90.0   73.0   0.75      # PLon, PLat, PAvr, Beta
+ .True.  .False.  .False.        # Arctic, Source, Restrt
+
