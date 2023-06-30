@@ -1,0 +1,10 @@
+ 'SMC1R3'
+ '/data/users/frjl/MFTModel/ShalwtMR/DatGMC/'
+ 68000  69000   3  58235 # NCL,  NFC,  MRL,  Itrm
+ 1024    720    2    2   # NLon, NLat, NPol, Init
+ 9600    240   20   20   # NTS,  NWP,  NHrg, NLrg
+ 0.0  0.0  0.3515625   0.2500000   # ZLon, ZLat, DLon, DLat
+ 90.0   90.0   3.0E5   0.0         # DTG,  DT,   AHK,  GmDT
+ -180.0  2.864789  73.0   0.3      # PLon, PLat, PAvr, Beta
+ .True.  .False.  .False.          # Arctic, Source, Restrt
+
