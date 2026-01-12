@@ -1,11 +1,11 @@
-#!/usr/bin/ksh
+#!/bin/bash
 
 ##  Count ISD JSD face numbers of different sizes
 ##  Usage:  countisd ISD_File JSD_File
 ##  Output is saved as newISD_File, newJSD_File
 ##
 ##  First created:   Jian-Guo Li    26 Feb 2010
-##  Last modified:   Jian-Guo Li    12 Mar 2020
+##  Last modified:   Jian-Guo Li    10 Nov 2025
 ##
 
 ##  Use given input files.
