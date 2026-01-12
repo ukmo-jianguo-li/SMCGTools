@@ -1,16 +1,8 @@
 """
-##  Adapted to generate G6-25kmSMCels from ASCII Bathymetry files. 
-##                                   JGLi18Sep2014
-##  Adapted for global 6-12-25-50 km SMC grid for CMA model. JGLi10Aug2018 
-##  Converted from IDL into Python code.    JGLi14Feb2019 
-##  Rectify size-1 cell bug and re-generate 6-50 cels.  JGLi04May2021 
-##  Modified for SMCGTools to generate sample 6-50 cells.  JGLi06Oct2021 
-##  Updated to read netCDF bathy and generate 2.5-5-10-20-40 km cells.  JGLi10Nov2022 
-##  Separate main function from smcellgen function.   JGLi18Nov2022  
-##  Modified to generate European 1.25-2.5-5-10 km grid.  JGLi29Nov2022
-##  Modified to generate Caspian Sea 2.5-5-10-20 km grid.  JGLi28Feb2023
-##  Modified to generate Caspian Lake Superior 3-7-13-25 km grid.  JGLi22Mar2023
-##  Modified to generate Caspian Lake Superior 6-12-25 km grid.  JGLi28Apr2023
+##  Program to generate 6-25km SMC cell arrays for Gt Lakes and Caspian Sea.
+##
+##  First created:        JGLi28Feb2023
+##  Last modified:        JGLi03Feb2025
 ##
 """
 
@@ -25,7 +17,7 @@ def main():
     Wrkdir='../tmpfls/'
     bathyf='../Bathys/Bathy088_059deg.nc'
     Global= False
-    Arctic= False
+#   Arctic= False   ## defaul value.
 
 ##  Open and read bathymetry data.
     datas = nc.Dataset(bathyf)
@@ -60,13 +52,13 @@ def main():
     datas.close()
 
 ##  Check top row bathy values
-    print('Bathy[',nlat-1,[f'{i:d}' for i in range(0,nlon,1024)],']')
-    print(Bathy[nlat-1,0:nlon:1024])
+#   print('Bathy[',nlat-1,[f'{i:d}' for i in range(0,nlon,1024)],']')
+#   print(Bathy[nlat-1,0:nlon:1024])
 
 ##  Patch last row values to be exactly the ones in the next inner row.
 #   Bathy[nlat-1,:] = Bathy[nlat-2,:]
 
-##  Check last column bathy values
+##  Check last and first column bathy values
 #   print('Bathy[',[f'{i:d}' for i in range(0,nlat,225)],',', nlon-1,']')
 #   print(Bathy[0:nlat:225,nlon-1])
 #   print('Bathy[',[f'{i:d}' for i in range(0,nlat,225)],',', 0,']')
@@ -91,29 +83,34 @@ def main():
     for grd in range(len(GridNames)):
         GridNm=GridNames[grd]+'6125'
         Ranges=LakeRange[grd]
-        depmin=Lowaterlv[grd]
-##  Note depmin defines water surface altitude (normally sea level 0.0)
+        wlevel=Lowaterlv[grd]
+##  Note wlevel defines water surface altitude (normally sea level 0.0) 
 ##  and non-zero values are used to define lake surfaces differ from sea level.
-##  dshalw defines shallow water altitude and is used to refine shallow ater area
-##  so setting dshalw equal to depmin makes all area below depmin to be deep water.
-##  Define dshalw = depmin - 60.0 will refine areas less than 60 m below depmin.
-        dshalw=depmin
+##  The depmin defines the minimum elavation the model domain should cover and 
+##  it will be reset equal to wlevel if it is given a value lower than wlevel.  
+##  For any dry cells to be included, depmin should be greater than wlevel.  The
+##  dshalw defines shallow water altitude and is used to refine shallow water area
+##  so setting dshalw equal to wlevel makes all area below wlevel to be deep water.
+##  Define dshalw = wlevel - 60.0 will refine areas less than 60 m below wlevel.
+        dshalw=wlevel
+        depmin=wlevel
  
-        print( GridNm+" range and water level =", Ranges, depmin  ) 
+        print( GridNm+" range and water level =", Ranges, wlevel  ) 
 
 ##  Merte lake range with mlvlxy0 array. 
         mlvlxy0 = [ NLvl, x0lon, y0lat ] + Ranges 
 
         smcellgen(Bathy, ndzlonlat, mlvlxy0, FileNm=Wrkdir+GridNm, 
-            Global=Global, Arctic=Arctic, depmin=depmin, dshalw=dshalw) 
+            Global=Global, depmin=depmin, dshalw=dshalw, wlevel=wlevel) 
     
-        print( "GridNm cells saved in ", Wrkdir+GridNm+'cels.dat')
+        print( "GridNm cells saved in ", Wrkdir+GridNm+'Cels.dat')
 
 ##  End of lake grid loop.
     
-##  End of main program.
-
+##  End of main function.
 
 if __name__ == '__main__':
     main()
+
+##  End of program Lakes625Cells.py.
 

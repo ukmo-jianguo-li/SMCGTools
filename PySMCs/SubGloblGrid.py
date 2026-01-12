@@ -1,40 +1,67 @@
 """
-## Program to draw the Sub61250 sub-grids and merged one.
+##
+## Program to draw Sub-grids and merged one.
 ##
 ## First created:        JGLi12Jan2021
-## Last modified:        JGLi02May2025
+## Last modified:        JGLi11Nov2025
 ##
 """
 
-def main():
-
 ## Import relevant modules and functions
-    import numpy as np
-    import matplotlib.pyplot as plt
+import sys
+import numpy as np
+#import matplotlib.pyplot as plt
 
-    from datetime import datetime
-    from readcell import readcell   
-    from rgbcolor import rgbcolor
-    from smcgrids import smcgrids
-    from addtexts import addtexts
-    from smcelvrts import smcelvrts
-    from smcellmap import smcell, smcmap, smcids
+from matplotlib.figure import Figure
+from datetime import datetime
+from readcell import readcell   
+from rgbcolor import rgbcolor
+from smcgrids import smcgrids
+from addtexts import addtexts
+from smcelvrts import smcelvrts
+from smcellmap import smcell, smcmap, smcids
 
-    print( " Program started at %s " % datetime.now().strftime('%F %H:%M:%S') )
+def main():
+    """ Draw Sub-grids or merged global grid. """
+
+## Check input information file name if provided.
+    print(sys.argv)
+    if( len(sys.argv) > 1 ):
+        if( len(sys.argv[1]) > 3 ):
+            gridfile = sys.argv[1]
+    else:
+        gridfile = 'GridInfo61250Subs.txt'
+
+## Read global grid information file. 
+    with open( gridfile, 'r' ) as flhdl:
+## First line contains merged global and sub-grids names.
+        nxlne = flhdl.readline().split()
+        Subnms = list(nxlne) 
+        Subdct = dict(enumerate(Subnms)) 
+        print(" Sub-grid extensions = \n", Subnms)
+## Second line contains zlon zlat dlon dlat of size-1 cell parameters.
+        nxlne = flhdl.readline().split()
+        zdlnlt = np.array(nxlne, dtype=float)
+        print(" Input grid zlon zlat dlon dlat = \n", zdlnlt)
+## Third line is the working directory and cell array subdirectory.
+        nxlne = flhdl.readline().split()
+        Wrkdir=nxlne[0]
+        DatSub=nxlne[1]
+        MCodes=nxlne[2]
+        print(" Wrkdir, DatSub and MCodes = \n", nxlne)
+## Fourth line starts with the number of polar cells.
+        nxlne = flhdl.readline().split()
+        nplc = int(nxlne[0])
+        ngrd = int(nxlne[1])
+        print(" Number of polar cells and sub-grids = ", nplc, ngrd)
+## Final line is the SWH files and propagation test output directories.
+        nxlne = flhdl.readline().split()
+        SWHdir=nxlne[0]
+        OutDat=nxlne[1]
+        print(" SWH and Prop OutDat = \n", nxlne)
 
 ## Read global and Arctic part cells. 
-    DatSub='../DatSub/'
-    Wrkdir='../tmpfls/'
     Arcell='../DatGMC/SMC61250BArc.dat'
-
-## Size-1 cell increments
-    dxlon=0.087890625
-    dylat=0.058593750
-#   dxlon=0.0439453125
-#   dylat=0.029296875
-    zrlon=0.0
-    zrlat=0.0
-    zdlnlt = [zrlon, zrlat, dxlon, dylat]
 
 ## Use own color map and defined depth colors 
     colrfile = 'rgbspectrum.dat'
@@ -46,21 +73,19 @@ def main():
     fntsa = 1.20*fntsz
     fntsb = 1.50*fntsz
 
-## Possible selection of your plot types. 
-    gorloc={0:'SubG',1:'Soth',2:'Pacf',3:'Atln'}
-
 ## Prompt selection choices and ask for one input
-    print (" \n ", gorloc)
+    print (" \n ", Subdct)
     instr = input(' *** Please enter your selected number here > ')
     m = int(instr)
-    pltype=gorloc.get(m, 'Invalid_selection')
-    if( pltype == 'Invalid_selection' ): 
+    Gname=Subdct.get(m, 'Invalid_selection')
+    if( Gname == 'Invalid_selection' ): 
         print ("Invalid selection, program terminated.")
         exit()
 
-    print( " Start draw "+pltype+" at %s " % datetime.now().strftime('%F %H:%M:%S') )
+    ptype=Gname[0:4]
+    print( " Start draw "+Gname+" at %s " % datetime.now().strftime('%F %H:%M:%S') )
 
-    if( pltype == 'Soth' ):
+    if( ptype == 'Soth' ):
 ## Whole global projection angle from N Pole to be 90.0
         pangle= 90.0
         plon=-136.0
@@ -70,7 +95,7 @@ def main():
         rngsxy=[-10.0, 10.0,  -9.5,  9.0]
         papror='portrait'
 
-    if( pltype == 'Pacf' ):
+    if( ptype == 'Pacf' ):
 ## Whole global projection angle from N Pole to be 90.0
         pangle=90.0
         plon=  10.0 
@@ -82,7 +107,7 @@ def main():
         rdpols=[radius, pangle, plon, plat]
 
 ## Atlantic regional plot for Atln61250 sub-grid
-    if( pltype == 'Atln'):
+    if( ptype == 'Atln'):
         pangle= 50.0 
         plon=-53.0
         plat= 51.0
@@ -92,7 +117,7 @@ def main():
         papror='portrait'
 
 ## Full global plot of all sub-grids.
-    if( pltype == 'SubG' ):
+    if( ptype == 'SubG' ):
         pangle=90.0
         plon= 0.0
         plat= 23.5
@@ -104,15 +129,14 @@ def main():
     rdpols=[radius, pangle, plon, plat]
 
 ## Model name for selected grid. 
-    ModlName=pltype+'61250'
-    epsfile=Wrkdir+ModlName+'grd.eps' 
+    epsfile=Wrkdir+Gname+'grd.eps' 
     spbuofl='../Bathys/SPBuoys.dat'
     paprorn='portrait'
 
     if( m > 0 ):
 ## Process sub-grid and its boundary cells
-        Cellfile = [DatSub+ModlName+'Cels.dat']
-        Bndyfile = [DatSub+ModlName+'Bdys.dat']
+        Cellfile = [DatSub+Gname+'Cels.dat']
+        Bndyfile = [DatSub+Gname+'Bdys.dat']
 ## Append Arctic part for Atln sub-grid.
         if( m == 3 ):
             Cellfile.append(Arcell)
@@ -146,14 +170,14 @@ def main():
 
 ## Save boundary cell sequential number list for Pacf61250 grid.
         fmt = '%8d '
-        Bndylist = Wrkdir+ModlName+'Blst.dat'
+        Bndylist = Wrkdir+Gname+'Blst.dat'
 ## Boundary cell sequential numbers have to increase by 1 for WW3. JGLi06Oct2020
         np.savetxt(Bndylist, np.array(ncbdy)+1, fmt=fmt, header='',  comments='')
 
 ## Save the boundary cell xlon, ylat to generate boundary condition in WW3.
         hdr = f'{nbdy:8d} \n'
         fms = '%s '
-        Bndylnlt = Wrkdir+ModlName+'Blnlt.dat'
+        Bndylnlt = Wrkdir+Gname+'Blnlt.dat'
         with open(Bndylnlt, 'w') as flhd:
             flhd.writelines(hdr)
             for j in range(nbdy):
@@ -162,54 +186,54 @@ def main():
         print(" Boundary cells saved in "+Bndylnlt )
 
 ## For Soth and Pacf sub-grids draw the southern hemisphere
-        if( pltype == 'Soth' or pltype == 'Pacf' ):
+        if( ptype == 'Soth' or ptype == 'Pacf' ):
             Arctic= False
             np000 = [nc, 0, nsmrk[0], nsmrk[1]]
             config=np.array([rdpols, sztpxy, rngsxy, clrbxy, np000])
-            pzfile=DatSub+ModlName+'Vrts.npz'
+            pzfile=DatSub+Gname+'Vrts.npz'
             np.savez( pzfile, nvrt=svrts, ncel=scels, cnfg=config) 
             print(" Verts data saved in "+pzfile )
 
-            fig, ax = plt.subplots(figsize=sztpxy[0:2])
+            fig = Figure(figsize=sztpxy[0:2])
+            ax = fig.subplots()
 
             smcgrids(ax, cel, svrts,scels,colrs,config, 
                 Arctic=Arctic, nmark=nsmrk[1]) 
 
             xydxdy=[sztpxy[2], sztpxy[3]-0.6, 0.0, -0.6]
-            txtary= [ [ModlName+' Grid',  'k', fntsb],
+            txtary= [ [Gname+' Grid',     'k', fntsb],
                       ['NC='+str(nc),     'b', fntsa],
                       ['NBdy='+str(nbdy), 'r', fntsa] ]
             addtexts(ax, xydxdy, txtary)
-            plt.subplots_adjust(left=0,bottom=0,right=1,top=1)
+            fig.subplots_adjust(left=0,bottom=0,right=1,top=1)
 
 ## For Atln sub-grid draw the northern hemisphere
-        if( pltype == 'Atln' ):
+        if( ptype == 'Atln' ):
             Arctic = True 
             nabgpl = [na, nb, nbg, npl]
             config=np.array([rdpols, sztpxy, rngsxy, clrbxy, nabgpl])
-            pzfile=DatSub+ModlName+'Vrts.npz'
+            pzfile=DatSub+Gname+'Vrts.npz'
             np.savez( pzfile, nvrt=nvrts, ncel=ncels, cnfg=config) 
             print(" Verts data saved in "+pzfile )
 
-            fig, ax = plt.subplots(figsize=sztpxy[0:2])
+            fig = Figure(figsize=sztpxy[0:2])
+            ax = fig.subplots()
 
             smcgrids(ax, cel, nvrts,ncels,colrs,config,
                 Arctic=Arctic, nmark=nsmrk[0])
 
             xydxdy=[sztpxy[2], sztpxy[3]-0.6, 0.0, -0.6]
-            txtary= [ [ModlName+' Grid',  'k', fntsb],
+            txtary= [ [Gname+' Grid',     'k', fntsb],
                       ['NC='+str(nc),     'b', fntsa],
                       ['NA='+str(na),     'b', fntsa],
                       ['NBdy='+str(nbdy), 'r', fntsa] ]
             addtexts(ax, xydxdy, txtary)
-            plt.subplots_adjust(left=0,bottom=0,right=1,top=1)
+            fig.subplots_adjust(left=0,bottom=0,right=1,top=1)
 
 ## If m = 0 or full global grid.
-    if( pltype == 'SubG' ):
+    if( ptype == 'SubG' ):
 ## Read all sub-grid cells plus Arctic part.
-        Subs=['Soth','Pacf','Atln']
-
-        Celfiles = [ DatSub+Subs[i]+'61250Cels.dat' for i in [0, 1, 2] ]
+        Celfiles = [ DatSub+Subnms[i]+'Cels.dat' for i in [1, 2, 3] ]
         Celfiles.append(Arcell)
         Arctic = True
  
@@ -239,7 +263,7 @@ def main():
         BCels = []
         NBdys = np.zeros((3), dtype=int)
         for k in range(3):
-            Bndyfile = DatSub+Subs[k]+'61250Bdys.dat'
+            Bndyfile = DatSub+Subnms[k+1]+'Bdys.dat'
             headrs, bcel = readcell( [Bndyfile] ) 
             NBdys[k] = int( headrs[0].split()[0] )
             BCels.append(bcel)
@@ -261,13 +285,13 @@ def main():
 ## Save cell vertices without boundary cells for field plots.
         nabgpl = [na, nb, nbg, npl]
         config=np.array([rdpols, sztpxy, rngsxy, clrbxy, nabgpl])
-        pzfile=DatSub+ModlName+'Vrts.npz'
+        pzfile=DatSub+Gname+'Vrts.npz'
         np.savez( pzfile, nvrt=nvrts, ncel=ncels, cnfg=config, 
                           svrt=svrts, scel=scels)
         print(" Verts data saved in "+pzfile )
 
 ## Draw the global plot for SubG61250 in global view. 
-        fig=plt.figure(figsize=sztpxy[0:2])
+        fig=Figure(figsize=sztpxy[0:2])
         ax1=fig.add_subplot(1,2,1)
 
         smcgrids(ax1, cel, nvrts,ncels,colrs, config, Arctic=True, 
@@ -278,19 +302,19 @@ def main():
                  nmark=nsmrk[1], buoys=spbuofl, hemis=-1.0)
 
         xydxdy=[sztpxy[2], sztpxy[3], 0.0, 0.6]
-        txtary=[ [ModlName+' Grid',  'k', fntsb],
-                 ['NC='+str(nc),     'b', fntsa],
-                 ['NA='+str(na),     'b', fntsa],
-                 ['NB='+str(nb),     'r', fntsa] ]               
+        txtary=[ [Gname+' Grid',  'k', fntsb],
+                 ['NC='+str(nc),  'b', fntsa],
+                 ['NA='+str(na),  'b', fntsa],
+                 ['NB='+str(nb),  'r', fntsa] ]               
         addtexts(ax2, xydxdy, txtary)
-        plt.subplots_adjust(left=0.01, bottom=0.0, right=0.99, 
-                             top=1.0, wspace=0.01, hspace=0.0)
+        fig.subplots_adjust(left=0.005, bottom=0.0, right=0.995, 
+                             top=1.0,  wspace=0.01, hspace=0.0)
 
-## Save grid plot as eps file.
+## Save grid plot as eps file and clear figure contents.
     print (" ... saving the smc grid plot as ", epsfile )
-    plt.savefig(epsfile, dpi=None,facecolor='w',edgecolor='w', \
+    fig.savefig(epsfile, dpi=None,facecolor='w',edgecolor='w', \
                 orientation=paprorn)
-    plt.close()
+    fig.clear()
 
 ##  All done and print timing line.
     print( " Program finished at %s " % datetime.now().strftime('%F %H:%M:%S') )
@@ -300,5 +324,5 @@ def main():
 if __name__ == '__main__':
     main()
 
-## End of Sub61250Grid3.py program.
+## End of SubGloblGrid.py program.
 
