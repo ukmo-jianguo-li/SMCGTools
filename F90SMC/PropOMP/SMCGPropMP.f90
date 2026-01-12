@@ -1,24 +1,9 @@
 !!
-!! Adapted for multiple cell 2D advection tests using UNO schemes.
-!!                    J G Li   26 Jul 2007
-!!
-!! Adapted for global multiple cell advection tests using UNO2 scheme.
-!!                    J G Li   22 Nov 2007
-!!
-!! Modified for global SMC grid extended to cover the N Pole.
-!!                    J G Li   26 Nov 2008
-!!
-!! Adapted for 2-part, 3-step, 3-resolution G6kSMC grid spectral transport.
-!!                    J G Li    5 Mar 2010
-!!
-!! Changed for global only SMC625 grid spectral transport.
-!!                    J G Li   12 Dec 2011
-!!
-!! Automatic setting of multi-resolution loops  with MRL and MRFct.
-!!                    J G Li   28 Feb 2014
-!!
-!! Adapted for SMCGTools as an independent SMC grid test model. 
-!!                    J G Li   12 Oct 2021
+!!  FORTRAN 90 propagation model for testing of SMC grid face arrays.
+!!  For single or two cores computer with OpenMP parallelization.  
+!! 
+!!  First created:        JGLi26Nov2008
+!!  Last modified:        JGLi05Feb2025
 !!
 
       PROGRAM SMCPropMP
@@ -574,12 +559,16 @@
           lm = ICE(2,NC-NArc+1) - MRFct*15
           mn = NINT( (86.0 - ZLat)/(DLat*MRFct) )*MRFct
       ENDIF
+      WRITE(6,*) '  Initial non-zero S/N belt and ArcPatch j ranges =', jk, kl, lm, mn
+      WRITE(6,*) '  Cell array j range =', MINVAL(ICE(2,:)), MAXVAL(ICE(2,:)+ICE(4,:))
 
 !! N Atlantic centre at one size-8 cell centre.
       ijk=NINT(330.0/(MRFct*DLon))*MRFct + MRFct/2
       lmn=NINT(  5.0/(MRFct*DLat))*MRFct + MRFct/2
 
 !! Loop over all cells to select strip points. 
+      ii = 0
+      jj = 0
       DO i=1,NC
          ll=ICE(2,i)
          mm=ICE(2,i) + ICE(4,i)
@@ -590,10 +579,12 @@
 !!  Northern strip above SNLat, use Spec1D
             IF( kl .LT. ll  .AND.  ll .LT. lm ) THEN
                 WSpc(1:NDir,j,i)=Spec1D*Spec1F(j)
+                ii = ii + 1
             ENDIF
 !!  South strip below SSLat, use Spec2D
             IF( mm .LT. jk ) THEN
                 WSpc(1:NDir,j,i)=Spec2D*Spec2F(j)
+                jj = jj + 1
             ENDIF
 
 !!  For global grid with Arctic part, use stripes.
@@ -613,6 +604,8 @@
          ENDDO
 
       ENDDO
+
+      WRITE(6,*) '  Initial non-zero S/N belt points =', ii/NFrq, jj/NFrq
 
       WRITE(6,*) '  Wind file conversion done!'
 
@@ -1018,7 +1011,7 @@
 
 !  Output a few to check input values
        DO J=1, NC, NC/4
-          WRITE(6,'(i8,2i6,2i4,i6)') J, (ICE(N,J), N=1,4), KG(J)
+          WRITE(6,'(i8,2i6,i5,i4,i6)') J, (ICE(N,J), N=1,4), KG(J)
        END DO
 
 !    Boundary -9 to 0 cells for cell size 2**n
@@ -1203,5 +1196,7 @@
       RETURN
 
       END SUBROUTINE WRITESWH
+!!
+!!  End of program SMCGPropMP.f90 file.
 !!
 
