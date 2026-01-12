@@ -567,9 +567,10 @@
 
 
 !! Subroutine to initialise hw, corif, UC, VC for Galewsky etal (2004) test.
-      SUBROUTINE GsHfUCVC
+      SUBROUTINE GsHfUCVC(ICase)
         USE SWEsCnstMD
         IMPLICIT NONE
+        INTEGER, INTENT(IN):: ICase
         REAL:: CNST, CNST1, CNST2, CNST3, CNST4, CNST5, CNST6, CNST7
         REAL, ALLOCATABLE, DIMENSION(:)::  XLon, WLat, ELon, ELat, AnglD
         REAL ::  DfPolat, DfPolon
@@ -673,14 +674,17 @@
          CNST4 = 15.0*(WLAT(L)*D2RAD - Gsp2) 
          CNST6 = EXP(- CNST3*CNST3 - CNST4*CNST4 )
 
-!!  Initial U V components in unit m/s at cell centre local east.
+         IF( ICase > 0 ) THEN
+!!  Initial water height with disturbing field and Coriolis factor. 
+             HW(L)= Gshd + GsH(n) + GsPh*CCLat(n)*CNST6 
+         ELSE
+!!  Exclude disturbing field for steady flow test.  JGLi15May2025
+             HW(L)= Gshd + GsH(n)
+         ENDIF
+
+!!  Initial UC VC in unit m/s and Coriolis factor at cell centre local east.
          UC(L)= GsU(n)
          VC(L)= 0.0 
-
-!!  Initial water height with disturbing field and Coriolis factor 
-         HW(L)= Gshd + GsH(n) + GsPh*CCLat(n)*CNST6 
-!   Exclude disturbing field for steady flow test.  JGLi23Feb2017
-!        HW(L)= Gshd + GsH(n)
          CNST5=SIN(ELat(L)*D2RAD)
          CoriF(L) = Omega2*DT*CNST5
 
@@ -1006,6 +1010,253 @@
 
       RETURN
       END SUBROUTINE W6HfUCVC 
+
+!! Subroutine to initialise hw, corif, UC, VC for Indian Ocean tsunami.
+      SUBROUTINE TsunCanr
+       USE SWEsCnstMD
+       IMPLICIT NONE
+       REAL:: CNST, CNST1, CNST2, CNST3, CNST4, CNST5, CNST6, CNST7
+       REAL, ALLOCATABLE, DIMENSION(:)::  XLon, WLat, ELon, ELat, AnglD
+!! New tsunami test near Canarias Islands in the Atlantic Ocean.
+       INTEGER:: IStr=9744,IEND=9792, JStr=1136,JMid=1152,JEND=1168, SHgt=20.0
+       REAL:: tsulon=-17.000, tsulat=29.000, tsurds=0.8, tsuhit=8.0
+
+!!  Half-grid increment
+       CNST1=DLon*0.5
+       CNST2=DLat*0.5
+
+       ALLOCATE( XLon(NC), WLat(NC), ELon(NC), ELat(NC), AnglD(NC) )
+
+!!  Loop over all cells, excluding polar cells 
+       DO L=1, NC-NPol
+
+!!  Cell centre latitude equal to west side centre latitude.
+!!  Note j count from -90 to 90 so j=0 corresponding to equator
+         XLon(L)= Float( ICE(1,L) )*DLon + CNST1*Float( ICE(3,L) ) + ZLON
+         WLat(L)= Float( ICE(2,L) )*DLat + CNST2*Float( ICE(4,L) ) + ZLat
+
+       END DO
+
+!! AnglD will be undefined at poles as no local east at poles.  
+!! So polar cell centres are shifted slightly off the Poles.
+       IF( NPol .GT. 0 ) THEN
+       DO L=NC-NPol+1, NC
+         XLon(L)= Float(ICE(1,L))*DLon + ZLON
+         WLat(L)= Float(ICE(2,L))*DLat + CNST2*Float(ICE(4,L))*0.9999 + ZLat
+       ENDDO
+       ENDIF
+
+!!  Convert standard lat/lon into rotated lat/lon for deformation wind
+!      CALL LLTOEQANGLE( WLat, XLon, ELat, ELon,     &
+!     &                 AnglD, DfPolat, DfPolon, NC)
+
+!!  No need for rotation.
+       ELon = XLon
+       ELat = WLat
+       AnglD = 0.0
+
+!!  Cell centre U V for advective flux update.
+       UC=0.0
+       VC=0.0
+
+!!  Initialise Hw(NC) to be equal to mean sea level. 
+       Hw=0.0
+       WHERE( Btm < 0.0) Hw = -Btm 
+       
+!!  Loop over all cells to initialise tsunami disturbance.
+       DO L=1, NC
+
+!!  Work out hill radus from ELat and ELon
+!        CNST3 = ELon(L) - tsulon
+!        IF( CNST3 .GT.  180.0 ) CNST3 = CNST3 - 360.0 
+!        IF( CNST3 .LT. -180.0 ) CNST3 = CNST3 + 360.0 
+
+!        CNST4 = ELat(L) - tsulat
+!        CNST6 = SQRT( CNST3*CNST3 + CNST4*CNST4 )
+
+!!  Add tsunami disturbance to initial water height,  half up half down.
+!        IF( CNST6 .LT. tsurds ) THEN
+!           Hw(L) = Hw(L) + tsuhit*(1.0 - CNST6/tsurds)*SIGN(1.0, CNST3)
+!        ENDIF 
+!
+!!  New landslide off Tenerife Island about 200 km^3.  JGLi13Dec2023
+!!  Set 4 size-8 cells (about 20km x 20km) 50 m lower or to cell floor
+!!  and set another 4 size-8 cells north of them 50 m higher.
+         JJ = ICE(2, L)
+         IF( ICE(1,L) >= IStr .AND. ICE(1,L) < IEnd ) THEN
+             IF( JStr <= JJ .AND. JJ < JMid ) THEN
+                 Hw(L) = MAX(0.0, Hw(L)-SHgt*0.5 )
+             ELSEIF( JMID <= JJ .AND. JJ < JEND ) THEN
+                 Hw(L) = Hw(L) + SHgt
+             ENDIF
+         ENDIF
+       END DO
+
+!!  Initial Coriolis factor by rotated latitude.
+       DO L=1, NC
+         CoriF(L) = Omega2*DT*SIN(ELat(L)*D2RAD)
+       END DO
+
+       DEALLOCATE( XLon, WLat, ELon, ELat, AnglD )
+
+!!  Calcualte analytic solution terms for comparison with numerical ones.
+!!  Vortiticy and gradients are skipped for case 5. 
+      L = Itrm
+      Terms(4)=Hw(L)
+      Terms(5)=UC(L)
+      Terms(6)=VC(L)
+
+! 999  PRINT*, ' Sub TsunCanr ended.'
+
+      RETURN
+      END SUBROUTINE TsunCanr 
+
+!! Subroutine to initialise hw, corif, UC, VC for tsunami with
+!! Source.dat initial condition.
+!!                              JGLi22Dec2023
+      SUBROUTINE TsunamiS
+       USE SWEsCnstMD
+       IMPLICIT NONE
+       REAL:: CNST, CNST1, CNST2, CNST3, CNST4, CNST5, CNST6, CNST7
+       REAL, ALLOCATABLE, DIMENSION(:)::  XLon, WLat, ELon, ELat, AnglD
+       REAL, ALLOCATABLE, DIMENSION(:,:)::  DISTB
+!! New tsunami test for 2004 Boxing day tsunami in Indian Ocean.
+       INTEGER:: INmb, JNmb, IStr, IEND, JStr, JEND, MSiz
+
+!!  Half-grid increment
+       CNST1=DLon*0.5
+       CNST2=DLat*0.5
+
+       ALLOCATE( XLon(NC), WLat(NC), ELon(NC), ELat(NC), AnglD(NC) )
+
+!!  Open and read initial source disturbance data from file.
+       OPEN(UNIT=38,FILE='Source.dat',STATUS='OLD',IOSTAT=nn,ACTION='READ')
+       IF(nn /= 0) PRINT*,'Source.dat was not opened! '
+          READ(38,*)   INmb, JNmb, IStr, JStr, MSiz
+         WRITE( 6,*)   INmb, JNmb, IStr, JStr, MSiz
+       ALLOCATE( Distb(INmb, JNmb) )
+       DO k=1, JNmb
+          READ(38,*)   Distb(:,k)
+       ENDDO
+       CLOSE(38)
+       WRITE(6,*) "Distb(1,1), Distb(INmb, JNmb)=",  &
+                   Distb(1,1), Distb(INmb, JNmb)
+
+!!  Workout disturbance i, j range.
+       IEnd=IStr + INmb*MSiz
+       JEnd=JStr + JNmb*MSiz
+       IF( IEnd > NLon ) THEN
+           WRITE(6,*) " *** Initial disturnance out of range *** ", &
+                        IStr, IEnd, NLon
+       ENDIF
+
+!!  Loop over all cells, excluding polar cells 
+!$OMP Parallel DO Private(L)
+       DO L=1, NC-NPol
+
+!!  Cell centre latitude equal to west side centre latitude.
+!!  Note j count from -90 to 90 so j=0 corresponding to equator
+         XLon(L)= Float( ICE(1,L) )*DLon + CNST1*Float( ICE(3,L) ) + ZLON
+         WLat(L)= Float( ICE(2,L) )*DLat + CNST2*Float( ICE(4,L) ) + ZLat
+
+       END DO
+!$OMP END Parallel DO
+
+!! AnglD will be undefined at poles as no local east at poles.  
+!! So polar cell centres are shifted slightly off the Poles.
+       IF( NPol .GT. 0 ) THEN
+       DO L=NC-NPol+1, NC
+         XLon(L)= Float(ICE(1,L))*DLon + ZLON
+         WLat(L)= Float(ICE(2,L))*DLat + CNST2*Float(ICE(4,L))*0.9999 + ZLat
+       ENDDO
+       ENDIF
+
+!!  Convert standard lat/lon into rotated lat/lon for deformation wind
+!      CALL LLTOEQANGLE( WLat, XLon, ELat, ELon,     &
+!     &                 AnglD, DfPolat, DfPolon, NC)
+
+!!  No need for rotation.
+       ELon = XLon
+       ELat = WLat
+       AnglD = 0.0
+
+!!  Set all cell velocity to be zero for calm start.
+       UC=0.0
+       VC=0.0
+
+!!  Initialise Hw(NC) to be equal to mean sea level. 
+       Hw=0.0
+       WHERE( Btm < 0.0) Hw = -Btm 
+
+!!  Initial disturbance is stored in A for output.
+       A = 0.0
+       
+!!  Loop over all cells to initialise tsunami disturbance.
+!$OMP Parallel DO Private(L, i, j, K, M, II, JJ, KK, MM, LM, CNST6)
+       DO L=1, NC
+
+       IF( Btm(L) < 0.0 ) THEN
+          II = ICE(1,L)
+          JJ = ICE(2,L)
+          IF( IStr<=II .AND. II<IEnd .AND. JStr<=JJ .AND. JJ<JEnd ) THEN
+              i = INT( (II-IStr)/MSiz ) + 1
+              j = INT( (JJ-JStr)/MSiz ) + 1
+              K = INT( (ICE(3,L)-1)/MSiz ) + i
+              M = INT( (ICE(4,L)-1)/MSiz ) + j
+              IF( K > INmb ) K=INmb
+              IF( M > JNmb ) M=JNmb
+              LM=0
+              CNST6=0.0 
+              DO MM = j, M 
+              DO KK = i, K 
+                 CNST6=CNST6+Distb(KK, MM)
+                 LM = LM + 1
+              ENDDO
+              ENDDO
+!!  Lowest water level drop is limited to depth.  No limit for high lift.
+              A(L)  = MAX( Btm(L), CNST6/FLOAT(LM) )
+              Hw(L) = Hw(L) + A(L)
+!             WRITE(6,'(8i6,2F8.1)') ICE(:,L), i,j,K,M, Btm(L), A(L)
+          ENDIF 
+       ENDIF 
+ 
+       END DO
+!$OMP END Parallel DO
+
+!!  Initial Coriolis factor by rotated latitude.
+!$OMP Parallel DO Private(L)
+       DO L=1, NC
+         CoriF(L) = Omega2*DT*SIN(ELat(L)*D2RAD)
+       END DO
+!$OMP END Parallel DO
+
+       DEALLOCATE( XLon, WLat, ELon, ELat, AnglD, Distb )
+
+!!  Calcualte analytic solution terms for comparison with numerical ones.
+!!  Vortiticy and gradients are skipped for case 5. 
+      L = Itrm
+      Terms(4)=Hw(L)
+      Terms(5)=UC(L)
+      Terms(6)=VC(L)
+
+! 999  PRINT*, ' Sub TsunamiS ended.'
+
+      RETURN
+      END SUBROUTINE TsunamiS 
+
+!! Subroutine to initialise hw, corif, UC, VC for Indian Ocean tsunami.
+      SUBROUTINE TsunChil
+       USE SWEsCnstMD
+       IMPLICIT NONE
+       REAL:: CNST, CNST1, CNST2, CNST3, CNST4, CNST5, CNST6, CNST7
+       REAL, ALLOCATABLE, DIMENSION(:)::  XLon, WLat, ELon, ELat, AnglD
+!! New tsunami test near Canarias Islands in the Atlantic Ocean.
+       REAL:: tsulon=-17.000, tsulat=29.000, tsurds=0.8, tsuhit=8.0
+
+! 999  PRINT*, ' Sub TsunamHw ended.'
+
+      RETURN
+      END SUBROUTINE TsunChil 
 
 
 !   End of module SWEsInitMD.

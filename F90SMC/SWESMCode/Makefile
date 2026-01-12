@@ -5,13 +5,13 @@
 
 #FC = ftn
 #FCFLAGS = -e Z -h noacc
-#FC = gfortran
-#FCFLAGS = -fdefault-real-8 
-FC = ifort
-FCFLAGS = -r8 
+ FC = gfortran
+ FCFLAGS = -fdefault-real-8 -fopenmp 
+#FC = ifort
+#FCFLAGS = -r8 
 CPPFLAGS= 
 
-SWEsnSMCex: SWEsCnstMD.o  SWEsInitMD.o  SWEsDynaMD.o  SWEsnSMCPM.o 
+SWEsnSMCeP: SWEsCnstMD.o  SWEsInitMD.o  SWEsDynaMD.o  SWEsnSMCPM.o 
 	@ echo "Linking $@ $^"
 	$(FC) $(FCFLAGS) -o $@ $^
 

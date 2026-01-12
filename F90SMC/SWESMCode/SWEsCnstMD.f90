@@ -1,7 +1,7 @@
 !!
 !! Module for variables used in the SWEs model on a SMC grid.  
 !! First created:  JGLi12Apr2018
-!! Last modified:  JGLi08Aug2022
+!! Last modified:  JGLi26Jul2024
 !!
       MODULE SWEsCnstMD
           IMPLICIT NONE
@@ -9,13 +9,13 @@
 !! Parameters to be read from InpFile:
        CHARACTER(LEN=16):: GridName='Medi36125' 
        CHARACTER(LEN=80):: DataPath='../Med36125/DatGMC/' 
-       INTEGER:: NCL,  NFC,  MRL,  Itrm=1,  &
+       INTEGER:: NCL,  NFC,  MRL,  Itrm=1, NPrt=0, &
                  NLon, NLat, NPol, Init=0,  &
                  NTS,  NWP,  NHrg, NLrg
        REAL   :: ZLon, ZLat, DLon, DLat,  &
-                 DTG,  DT,   AKH,  GmDT,  &
+                 DFR0, DT,   AKHM, CBFr,  &
                  PLon, PLat, PAvr, Beta  
-       LOGICAL:: Arctic, Source, Restrt
+       LOGICAL:: Arctic, Source, WHPrts, Restrt
 
 !! Model variables to be defined and working variables.
        INTEGER:: NS, NT, ND, NE, NF, NA, NB, NP, NR, NBdy,  & 
@@ -26,22 +26,22 @@
                  icl, jcl, iuf, juf, ivf, jvf, LvR, Lvm,    & 
                  JEqut, JAvrg, JPvrg, NU16, NV16 
 
-       REAL   :: CMX, CTT, DY, DYR, DX0, AKHDT2, Frct, UMX,  &
-                 Hwint, Vrint, Entgrl, Enpt0, Enetp, Terms(6)=0.0
+       REAL   :: CMX, CTT, DY, DYR, DX0, AKHDT2, AKHDMX, Frct, UMX,  &
+                 Hwint, Vrint, Entgrl, Enpt0, Enetp, Enetk, Terms(6)=0.0
        REAL, DIMENSION(3)::  HEl12m=0.0, UEl12m=0.0, VEl12m=0.0 
 
 !! Allocatable arrays, depending on InpFile parameters.
        INTEGER, DIMENSION(:),   ALLOCATABLE:: ICE3, ICE4, KG, NSCELS, &
-                                NRLCel, NRLUFc, NRLVFc, MBGLo, MBArc   
+                           NRLCel, NRLUFc, NRLVFc, MBGLo, MBArc, IDPrt
 
        INTEGER, DIMENSION(:,:), ALLOCATABLE:: ICE, ISD, JSD
 
-       REAL, DIMENSION(:), ALLOCATABLE::  A, C, D, F, Hw, AU, AV, &
+       REAL, DIMENSION(:), ALLOCATABLE:: A, C, D, F, Hw, AU, AV,  &
                            DX, DXR, UC, VC, Hw0, UC0, VC0, Btm,   &
                            CSAnC, SNAnC, AngCD, RCELA, CoriF,     &
-                           Entt, Enkn, Vort,  HCel, DHDX, DHDY,   &
+                           Enpt, Enkn, EnkH, Vort, DHDX, DHDY,    &
                            YSLat, YCLat, CSLat, CCLat, BS2Lat,    & 
-                           UCL, UCS, VCS 
+                           UCL, UCS, VCS, BFrc, HCel
        REAL, DIMENSION(:), ALLOCATABLE ::   U, UT, V, VT, FU, FV, &
                            FX, FY, CSAnU, SNAnU, CSAnV, SNAnV
 
@@ -56,19 +56,21 @@
        REAL,PARAMETER:: GRVTY=9.80616, CPVAP=1004.5, RDRY=287.05,    &
         &    CT0=273.16,CALJO=4.1868,PATM=101325.0, ANGUL=7.292E-5,  &
         &    EPSLN=0.6220, CLIGHT=2.99792458E8, Omega2=1.4584E-4,    &
-        &    REARTH=6.37122E6, Agu36=4.8481E-5, Agu12d=6.0602E-6 
+        &    REARTH=6.37122E6, Agu36=4.8481E-5, Agu12d=6.0602E-6,    &
+        &    GmDT=0.0, DepMn=5.5, DFHr=12.0  
+!!  GmDT is set to be zero and CBFr is moved as input variable.  JGLi21Mar2024
 
 !! Default integers for any loop count or temporary use. 
        INTEGER:: I,II,IJ,IJK,J,JJ,JK,K,KK,L,LL,LM,LMN,M,MM,MN,N,NN
 
 !! Date and time for timing of program by calling Date_And_Time
-       CHARACTER(LEN=10):: CDate, CTime
+       CHARACTER(LEN=10):: CDate, CTime, STime
 
 !! Other character variables.
        CHARACTER(LEN=1)::XEXT(6)=(/'S','B','W','E','C','M'/)
 
 !! Default run name and date and input file.
-       CHARACTER(LEN=26):: RUNDATE=' Medi36125 26Jul2022 ',  &
+       CHARACTER(LEN=26):: RUNDATE=' SMC251040 12Dec2023 ',  &
                            InpFile='./SWEsInput.txt'
 !!
 

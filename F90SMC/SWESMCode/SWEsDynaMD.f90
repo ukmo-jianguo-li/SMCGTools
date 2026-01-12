@@ -52,16 +52,22 @@
         CNST0= GRVTY*DT
 
 !! Loop over all cells, including polar cells.
+!$OMP Parallel DO Private(n)
         DO n=1, NC 
 !! Only calculate U V at wet points
            IF( Hw(n) .GT. ZENO ) THEN
            F(n)=0.5*Vort(n)
            D(n)=F(n)*F(n)
+!! Add bottom friction term by a semi-implicity scheme.  JGLi14Dec2023
+           C(n)=BFrc(n)/(Hw(n) + DepMn)
+ 
 !! Add damping term -GmDT*UC    JGLi04Mar2016
            AU(n)= ( (1.0-D(n)-GmDT)*UC(n)+Vort(n)*VC(n)-DHDX(n)*CNST0  &
-      &             -F(n)*DHDY(n)*CNST0 )/(1.0+D(n)) 
+      &             -F(n)*DHDY(n)*CNST0 )/(1.0+D(n)+C(n)) 
+!     &             -F(n)*DHDY(n)*CNST0 )/(1.0+D(n)) 
 !! Add damping term -GmDT*VC    JGLi04Mar2016
-           AV(n)= VC(n)*(1.0-GmDT)-F(n)*(UC(n)+AU(n))-DHDY(n)*CNST0
+           AV(n)=(VC(n)*(1.0-GmDT)-F(n)*(UC(n)+AU(n))-DHDY(n)*CNST0)/(1.0+C(n))
+!          AV(n)= VC(n)*(1.0-GmDT)-F(n)*(UC(n)+AU(n))-DHDY(n)*CNST0
            ENDIF
            IF( n .EQ. Itrm ) THEN
               Terms(1)=Vort(n)
@@ -72,11 +78,14 @@
               Terms(6)=AV(n)
            ENDIF
         ENDDO
+!$OMP END Parallel DO
 
+!$OMP Parallel DO Private(m)
         DO m=1, NC 
            Ucr(m)= AU(m)
            Vcr(m)= AV(m)
         ENDDO
+!$OMP END Parallel DO
 
 !!    Update boundary cells after proper rotation if Arctic part is
 !!    included. 
@@ -96,21 +105,25 @@
          REAL:: CNST, CNST0, CNST1, CNST2, CNST3, CNST4, CNST5, CNST6
 
 !!    Arctic cells for global boundary cells, rotate by AngC
+!$OMP Parallel DO Private(i, ii, kk)
        DO i=1,NGLB
           ii=i+NGLA
           kk=MBGLo(i)
           Uctr(ii)= Uctr(kk)*CSAnC(kk) + Vctr(kk)*SNAnC(kk)
           Vctr(ii)= Vctr(kk)*CSAnC(kk) - Uctr(kk)*SNAnC(kk)
        ENDDO
+!$OMP END Parallel DO
 
 !!    Global cells for Arctic boundary cells.
 !!    Note AngC is only defined for Arctic cells.
+!$OMP Parallel DO Private(i, ii, kk)
        DO i=1,NArB
           ii=i+NArA
           kk=MBArc(i)
           Uctr(ii)= Uctr(kk)*CSAnC(ii) - Vctr(kk)*SNAnC(ii)
           Vctr(ii)= Vctr(kk)*CSAnC(ii) + Uctr(kk)*SNAnC(ii)
        ENDDO
+!$OMP END Parallel DO
 
 ! 999  PRINT*, ' Sub BondVictr ended.'
 
@@ -126,18 +139,22 @@
          REAL:: CNST, CNST0, CNST1, CNST2, CNST3, CNST4, CNST5, CNST6
 
 !!    Arctic cells for global boundary cells
+!$OMP Parallel DO Private(i, ii, kk)
        DO i=1,NGLB
           ii=i+NGLA
           kk=MBGLo(i)
           Sclr(ii) = Sclr(kk)
        ENDDO
+!$OMP END Parallel DO
 
 !!    Global cells for Arctic boundary cells
+!$OMP Parallel DO Private(i, ii, kk)
        DO i=1,NArB
           ii=i+NArA
           kk=MBArc(i)
           Sclr(ii) = Sclr(kk)
        ENDDO
+!$OMP END Parallel DO
 
 ! 999  PRINT*, ' Sub BondScalr ended.'
 
@@ -193,22 +210,31 @@
 
 !  Store conservative flux in F advective one in A
 !  Add diffusion flux as well, note FX with an negative sign
+!$OMP Parallel DO Private(i, M, N)
            DO i=iuf, juf
               M=ISD(5,i)
               N=ISD(6,i)
 !  Closed boundary condition for SWE model mass conservation.
-           IF( M > 0 .AND. N > 0 ) THEN           
-              F(M) = F(M) - FU(i)*U(i)*CNST2 + FX(i)
-              F(N) = F(N) + FU(i)*U(i)*CNST2 - FX(i)
-              AU(M) = AU(M) - FU(i)*UCL(M)*CNST2 + FX(i)
-              AU(N) = AU(N) + FU(i)*UCL(N)*CNST2 - FX(i)
+           IF( M > 0 ) THEN           
+!$OMP ATOMIC 
+              F(M) = F(M) - (FU(i)*U(i)*CNST2 - FX(i))
+!$OMP ATOMIC 
+              AU(M) = AU(M) - (FU(i)*UCL(M)*CNST2 - FX(i))
+           ENDIF
+           IF( N > 0 ) THEN           
+!$OMP ATOMIC 
+              F(N) = F(N) + (FU(i)*U(i)*CNST2 - FX(i))
+!$OMP ATOMIC 
+              AU(N) = AU(N) + (FU(i)*UCL(N)*CNST2 - FX(i))
            ENDIF
            ENDDO
+!$OMP END Parallel DO
 
 !  Store conservative update in D and advective update in C
 !  The side length in MF value has to be cancelled with cell length
 !  Also divided by another cell length as U UC is in basic unit
            mm = 0
+!$OMP Parallel DO Private(n)
            DO n=icl, jcl
               D(n)=C(n) +  F(n)*RCELA(n)
               C(n)=C(n) + AU(n)*RCELA(n)
@@ -217,11 +243,14 @@
 !! Filter out negative C if any in substeps.  JGLi12Aug2022
               IF( C(n) .LT. 0.0 ) THEN
                   C(n) = 0.0
+!$OMP ATOMIC 
                   mm = mm + 1
                   IF( MOD(NT, 20*NWP) == 0 .AND. NB == 8 )  &
-                      WRITE(18,'(" Cu-",6i6)') ICE(:,n),KG(n)
+                      WRITE(17,'(" Cu-",6i6)') ICE(:,n),KG(n)
               ENDIF
            ENDDO
+!$OMP END Parallel DO
+
 !! Note the N Polar cell does not have any U-flux input.
 
 !  Call GMCyUNO2 to calculate MFy value
@@ -230,21 +259,28 @@
 
 !  Store conservative flux in F
 !  Add diffusion flux FY, note FY with an negative sign
+!$OMP Parallel DO Private(j, M, N)
            DO j=ivf, jvf
               M=JSD(5,j)
               N=JSD(6,j)
 !  Closed boundary condition for SWE model mass conservation.
 !  Polar region linking boundary 0 cells are allowed to open.  JGLi10Aug2022
 !          IF( M > 0 .AND. N > 0 ) THEN           
-           IF( M >= 0 .AND. N >= 0 ) THEN           
-              AV(M) = AV(M) - FV(j)*V(j)*CNST2 + FY(j)
-              AV(N) = AV(N) + FV(j)*V(j)*CNST2 - FY(j)
+           IF( M >= 0 ) THEN           
+!$OMP ATOMIC 
+              AV(M) = AV(M) - (FV(j)*V(j)*CNST2 - FY(j))
+           ENDIF
+           IF( N >= 0 ) THEN           
+!$OMP ATOMIC 
+              AV(N) = AV(N) + (FV(j)*V(j)*CNST2 - FY(j))
            ENDIF
            ENDDO
+!$OMP END Parallel DO
 
 !  Store conservative update of D in C 
 !  The v side length in MF value has to be cancelled with cell length
 !! One cosine factor is also needed to be divided for GMC grid
+!$OMP Parallel DO Private(n, CNST)
            DO n=icl,jcl
 !! Polar cells do not need the cosine factor.
               IF( n .GT. NC-NPol ) THEN
@@ -258,17 +294,19 @@
 !! Filter out negative C if any in substeps.  JGLi12Aug2022
               IF( C(n) .LT. 0.0 ) THEN
                   C(n) = 0.0
+!$OMP ATOMIC 
                   mm = mm + 1
                   IF( MOD(NT, 20*NWP) == 0 .AND. NB == 8 )  &
-                      WRITE(18,'(" Cv-",6i6)') ICE(:,n),KG(n)
+                      WRITE(17,'(" Cv-",6i6)') ICE(:,n),KG(n)
               ENDIF
 !
            ENDDO
+!$OMP END Parallel DO
 
 !! Warning if any NaN or negative water heights appeared.
-           IF( (NT<NWP .OR. MOD(NT,NWP).eq.0 ) .AND. mm>0 ) THEN
-               WRITE(6, FMT='(" Cw mm NT NB LvR =",6i8)') mm,NT,NB,LvR
-               WRITE(18,FMT='(" Cw mm NT NB LvR =",6i8)') mm,NT,NB,LvR
+           IF( ( NT<NWP .OR. MOD(NT,NWP).eq.0 ) .AND. mm>0 ) THEN
+!              WRITE(6, FMT='(" Cw mm NT NB LvR =",6i8)') mm,NT,NB,LvR
+               WRITE(17,FMT='(" Cw mm NT NB LvR =",6i8)') mm,NT,NB,LvR
            ENDIF
 
 !! End of refined level IF( MOD(NB, Lvm) .EQ. 0 ) block
@@ -308,10 +346,14 @@
          CNST7 = AKHDT2*TSF
          FX = 0.0 
 
+!$OMP  Parallel Default(Shared), Private(i, jk, K, L, M, N),  &
+!$OMP& Private(CNST,CNST0,CNST1,CNST2,CNST3,CNST4,CNST5,CNST6,CNST8,CNST9)
+
 !    Notice an extra side length L is multiplied to mid-flux to give correct
 !    proportion of flux into the cells.  This length will be removed by the
 !    cell length when the tracer concentration is updated.
 
+!$OMP DO
       DO i=NUA, NUB
 
 !    Diffusion k*dt*2/dx multiplied by TSF for multiple steps
@@ -374,6 +416,9 @@
          ENDIF
 
       END DO
+!$OMP END DO
+
+!$OMP END Parallel 
 
 ! 999  PRINT*, ' Sub SMCxUNO2 ended.'
 
@@ -398,10 +443,14 @@
          CNST7=AKHDT2*TSF*DYR*DYR
          FY = 0.0
 
+!$OMP  Parallel Default(Shared), Private(j, K, L, M, N),  &
+!$OMP& Private(CNST,CNST0,CNST1,CNST2,CNST3,CNST4,CNST5,CNST6,CNST8)
+
 !    Notice an extra side length L is multiplied to mid-flux to give correct
 !    proportion of flux into the cells.  This length will be removed by the
 !    cell length when the tracer concentration is updated.
 
+!$OMP DO
       DO j=NVA, NVB
 
 !!   Polar biased diffusivity.
@@ -460,6 +509,9 @@
          ENDIF
 
       END DO
+!$OMP END DO
+
+!$OMP END Parallel 
 
 ! 999  PRINT*, ' Sub SMCyUNO2 ended.'
 
@@ -480,20 +532,24 @@
 !    with all boundary cells refer to C(-2:0)=0.0.
 
 !    Diffusivity k*dt*2 is converted for grid scaled sub-timestep.
-         CNST7 = AKHDT2*TSF
+         CNST0 = AKHDT2*TSF
          FX = 0.0
+
+!$OMP  Parallel Default(Shared), Private(i, jk, K, L, M, N),  &
+!$OMP& Private(CNST,CNST1,CNST2,CNST3,CNST4,CNST5,CNST6,CNST7,CNST8,CNST9)
 
 !    Notice an extra side length L is multiplied to mid-flux to give correct
 !    proportion of flux into the cells.  This length will be removed by the
 !    cell length when the tracer concentration is updated.
 
+!$OMP DO
       DO i=NUA, NUB
 
 !    Diffusion k*dt*2/dx multiplied by TSF for multiple steps
 !    Add sine square polar biased factor  BS2Lat.  JGLi05Jun2017
          jk = 2*ISD(2,i)+ISD(3,i)
          CNST9= DX0*CCLat(jk)
-         CNST0= CNST7*BS2Lat(jk)/( CNST9*CNST9 )
+         CNST7= CNST0*BS2Lat(jk)/( CNST9*CNST9 )
 
 !    Select Upstream, Central and Downstream cells
          K=ISD(4,i)
@@ -510,7 +566,7 @@
          IF( C(L)>ZENO .AND. C(M)>ZENO ) THEN
 !!   Diffusion flux is proportional to total height H+b gradient and 
 !    is multiplied by Fourier Number and face_width.
-           FX(i)=CNST0*CNST8*(C(M)+Btm(M)-C(L)-Btm(L))/(CNST3+CNST2)
+           FX(i)=CNST7*CNST8*(C(M)+Btm(M)-C(L)-Btm(L))/(CNST3+CNST2)
          ENDIF
 
 !    Face normal velocity and courant number in local size-1 cell unit
@@ -578,6 +634,9 @@
          ENDIF
 
       END DO
+!$OMP END DO
+
+!$OMP END Parallel
 
 ! 999  PRINT*, ' Sub SMCxUNO3 ended.'
 
@@ -598,17 +657,21 @@
 !    with all boundary cells refer to C(-2:0)=0.0.
 
 !    Diffusion k*dt*2/(DY*DY) multiplied by TSF for multiple steps
-         CNST7=AKHDT2*TSF*DYR*DYR
+         CNST0=AKHDT2*TSF*DYR*DYR
          FY = 0.0 
+
+!$OMP  Parallel Default(Shared), Private(j, K, L, M, N),  &
+!$OMP& Private(CNST,CNST1,CNST2,CNST3,CNST4,CNST5,CNST6,CNST7,CNST8,CNST9)
 
 !    Notice an extra side length L is multiplied to mid-flux to give correct
 !    proportion of flux into the cells.  This length will be removed by the
 !    cell length when the tracer concentration is updated.
 
+!$OMP DO
       DO j=NVA, NVB
 
 !!   Polar biased diffusivity.
-         CNST0=CNST7*BS2Lat( 2*JSD(2,j) )
+         CNST7=CNST0*BS2Lat( 2*JSD(2,j) )
 
 !    Face size integer and cosine factor
          CNST8=CSLat( JSD(2,j) )*Real( JSD(3,j) )
@@ -628,7 +691,7 @@
          IF( C(L)>ZENO .AND. C(M)>ZENO ) THEN
 !!   Diffusion flux is proportional to total height H+b gradient and 
 !    is multiplied by Fourier Number and face_width.
-           FY(j)=CNST0*CNST8*(C(M)+Btm(M)-C(L)-Btm(L))/(CNST3+CNST2)
+           FY(j)=CNST7*CNST8*(C(M)+Btm(M)-C(L)-Btm(L))/(CNST3+CNST2)
          ENDIF
 
 !    Courant number in basic cell unit
@@ -695,6 +758,9 @@
          ENDIF
 
       END DO
+!$OMP END DO
+
+!$OMP END Parallel
 
 ! 999  PRINT*, ' Sub SMCyUNO3 ended.'
 
@@ -724,7 +790,11 @@
          C = CFld
          C(-9:0) = 0.0
 
+!$OMP  Parallel Default(Shared), Private(i, j, k, M, N),  &
+!$OMP& Private(CNST0,CNST1,CNST2,CNST3,CNST4,CNST5,CNST6,CNST8)
+
 !! Average over two cells bounding each U-face except for boundary cells. 
+!$OMP DO
          DO i=1, NU
             M=ISD(5,i)
             N=ISD(6,i)
@@ -734,14 +804,20 @@
              Hw(M)>ZENO .AND. Hw(N)>ZENO ) THEN 
             CNST8 = FLOAT( ISD(3,i) )
             CNST0 = CNST8*( C(M) + C(N) )
+!$OMP ATOMIC
             AU(M) = AU(M) + CNST0
+!$OMP ATOMIC
             AU(N) = AU(N) + CNST0
+!$OMP ATOMIC
             SLX(M) = SLX(M) + CNST8
+!$OMP ATOMIC
             SLX(N) = SLX(N) + CNST8
          ENDIF
          ENDDO
+!$OMP END DO
 
 !  Average over two cells bounding each V-face 
+!$OMP DO
          DO j=1, NV
             M=JSD(5,j)
             N=JSD(6,j)
@@ -750,18 +826,23 @@
              Hw(M)>ZENO .AND. Hw(N)>ZENO ) THEN 
             CNST6 = FLOAT( JSD(3,j) )
             CNST1 = CNST6*( C(M) + C(N) )
+!$OMP ATOMIC
             AV(M) = AV(M) + CNST1
+!$OMP ATOMIC
             AV(N) = AV(N) + CNST1
+!$OMP ATOMIC
             SLY(M) = SLY(M) + CNST6
+!$OMP ATOMIC
             SLY(N) = SLY(N) + CNST6
          ENDIF
          ENDDO
+!$OMP END DO
 
 !  Store averaged values back to C, excluding polar cells if any. 
-         DO n=1, NC-NPol
-!        DO n=1, NC
+!$OMP DO
+         DO k=1, NC-NPol
 !! Average only for wet cells whos Abs(J) index is above JAvrg.  JGLi19Jan2017
-           IF( ABS(ICE(2,n)-JEqut) >= JAvrg .AND. Hw(n)>ZENO ) THEN
+           IF( ABS(ICE(2,k)-JEqut) >= JAvrg .AND. Hw(k)>ZENO ) THEN
 
 !! The SLX(n)/ICE(4,n) or SLY(n)/ICE(3,n) should be less or equal to 2, each.
 !! They represent how many pairs of values are add for average, counting the 
@@ -776,29 +857,32 @@
 !! which use the SLY weight of all cells surrounding them.  JGLi08Aug2022
               CNST2 = 0.0
               CNST3 = 0.0
-              CNST4 = ( SLX(n)/ICE(4,n) + SLY(n)/ICE(3,n) )
+              CNST4 = ( SLX(k)/ICE(4,k) + SLY(k)/ICE(3,k) )
 
-              IF( SLY(n) > ZENO ) THEN
+              IF( SLY(k) > ZENO ) THEN
                  CNST2 = 1.0
-                 CNST3 = 0.5*AV(n)/SLY(n) 
+                 CNST3 = 0.5*AV(k)/SLY(k) 
               ENDIF
-              IF( SLX(n) > ZENO ) THEN
+              IF( SLX(k) > ZENO ) THEN
                  CNST2 = 1.0 + CNST2 
-                 CNST3 = 0.5*AU(n)/SLX(n) + CNST3  
+                 CNST3 = 0.5*AU(k)/SLX(k) + CNST3  
               ENDIF
 
               IF( CNST2 > ZENO ) THEN
                  CNST5 = CNST3/CNST2
-                 IF( n > NC-NPol ) THEN
-                    C(n) = CNST5
+                 IF( k > NC-NPol ) THEN
+                    C(k) = CNST5
                  ELSE
 !!  Use central biased average for partially surrounded cells.  JGLi05Sep2022
-                    C(n) = 0.25*( CNST5*CNST4 + (4.0-CNST4)*C(n) )
+                    C(k) = 0.25*( CNST5*CNST4 + (4.0-CNST4)*C(k) )
                  ENDIF   !! Polar cell difference.
               ENDIF      !! Non-zero CNST2 for average.
            ENDIF         !! JAvrg check.
 
          ENDDO
+!$OMP END DO
+
+!$OMP END Parallel
 
 !!   Assign averaged value back to CFld
          CFld = C
@@ -809,27 +893,33 @@
        END SUBROUTINE CntrAvrg
 
 ! Subroutine to calculate potential energy from Hw and Btm fields.
+! Also caculate column integrated kinetic enegy Enkn*Hw.
 !  First created:    9 Jan 2017   Jian-Guo Li
-!  Last modified:    9 Jan 2017   Jian-Guo Li
+!  Last modified:   25 Jul 2024   Jian-Guo Li
       SUBROUTINE TotlEngy
          USE SWEsCnstMD
          IMPLICIT NONE
          REAL:: CNST, CNST0, CNST1, CNST2, CNST3, CNST4, CNST5, CNST6
 
-!!  Initialise potential eneryg to be zero
-         Entt=0.0
+!!  Initialise potential and kinetic eneryg to be zero
+         EnkH=0.0
+         Enpt=0.0
 
 !!  Loop over all cells, including polar cells
+!$OMP Parallel DO Private(n)
          DO n=1, NC
 
 !!  Keep dry point potential energy to be zero. 
             IF (Hw(n) .GT. ZENO ) THEN
 !!  Standard potential energy forumlation except for the 
 !!  gravity constant as kinetic energy has divided by it.
-            Entt(n)= Hw(n)*( Enkn(n) + Hw(n)*0.5 + Btm(n) )
+            Enpt(n)= Hw(n)*( Hw(n)*0.5 + Btm(n) )
+!!  Column integrated kinetic energy is separated from potential energy. 
+            EnkH(n)= Hw(n)*Enkn(n) 
             ENDIF
 
          END DO
+!$OMP END Parallel DO
 
 ! 999  PRINT*, ' Sub TotlEngy ended.'
 
@@ -840,6 +930,8 @@
 ! Subroutine to calculate kinetic energy from given velocities
 !  First created:   12 Feb 2015   Jian-Guo Li
 !  Last modified:    8 Mar 2016   Jian-Guo Li
+!  Add bottom friction terms.  JGLi14Dec2023
+
       SUBROUTINE KinetcEn(Uctr, Vctr)
          USE SWEsCnstMD
          IMPLICIT NONE
@@ -847,22 +939,30 @@
          REAL:: CNST, CNST0, CNST1, CNST2, CNST3, CNST4, CNST5, CNST6
 
 !!  Cell centre kinetic energy divided by gravity constant GRVTY.
-!!  Set boundary cell kinetic energy to be zero
-!        Enkn(-9:0)=0.0
+!!  Set initial cell kinetic energy and friction force to be zero.
          Enkn=0.0
+         BFrc=0.0
          CNST=0.5/GRVTY
+         CNST1=CBFr*DT
 
 !!  Loop over all cells, including polar cells
+!$OMP Parallel DO Private(n, CNST2)
          DO n=1, NC
 
 !!  Keep dry point kinetic energy to be zero.  JGLi03Feb2016
             IF (Hw(n) .GT. ZENO ) THEN
 !!  Standard kinetic energy forumlation as UC and VC 
 !!  do not need conversion for correct velocity unit.
-            Enkn(n)= CNST*( Uctr(n)*Uctr(n) + Vctr(n)*Vctr(n) )
+               CNST2 = ( Uctr(n)*Uctr(n) + Vctr(n)*Vctr(n) )
+               Enkn(n)= CNST*CNST2
+
+!!  Bottom friction force velocity magnitude related part.
+               BFrc(n)= CNST1*SQRT( CNST2 )
+
             ENDIF
 
          END DO
+!$OMP END Parallel DO
 
 ! 999  PRINT*, ' Sub KinetcEn ended.'
 
@@ -904,6 +1004,8 @@
          SLY=ZENO
 
 !!   Use the face arrays to calculate the bathymetry x-gradients.
+!$OMP  Parallel DO Default(Shared), Private(i,M,N),  &
+!$OMP& Private(CNST,CNST1,CNST3,CNST4,CNST5,CNST7)
        DO i=1, NU
 
 !    Select Central and Downstream cells
@@ -933,12 +1035,18 @@
               IF(i .GT. NUGL) THEN
                  CNST4 =CNST7*CSAnU(i)
                  CNST5 =CNST7*SNAnU(i)
+!$OMP ATOMIC
                  AUN(M) = AUN(M) + CNST4
+!$OMP ATOMIC
                  AUN(N) = AUN(N) + CNST4
+!$OMP ATOMIC
                  AUT(M) = AUT(M) + CNST5
+!$OMP ATOMIC
                  AUT(N) = AUT(N) + CNST5
               ELSE
+!$OMP ATOMIC
                  AUN(M) = AUN(M) + CNST7
+!$OMP ATOMIC
                  AUN(N) = AUN(N) + CNST7
               ENDIF
 
@@ -948,16 +1056,21 @@
          ENDIF
 
 !!   Face length is always added even for boundary face.  JGLi03Jun2016
+!$OMP ATOMIC
          SLX(M) = SLX(M) + CNST1
+!$OMP ATOMIC
          SLX(N) = SLX(N) + CNST1
 
        END DO
+!$OMP END Parallel DO
 
 !!   Calculate DH/DY using JSD flux array to find neighbouring cells.
 !!   2.0 divided by the basic cell y-length at Equator in meter.  JGLi20Oct2016
          CNST6=2.0/(DY*REARTH)
 
 !!   Use the face arrays to calculate the bathymetry y-gradients.
+!$OMP  Parallel DO Default(Shared), Private(j,M,N),  &
+!$OMP& Private(CNST,CNST2,CNST3,CNST4,CNST5,CNST7)
        DO j=1, NV
 
 !    Select Central and Downstream cells
@@ -988,12 +1101,18 @@
               IF(j .GT. NVGL) THEN
                  CNST4 =  CNST7*CSAnV(j)
                  CNST5 = -CNST7*SNAnV(j)
+!$OMP ATOMIC
                  AVN(M) = AVN(M) + CNST4
+!$OMP ATOMIC
                  AVN(N) = AVN(N) + CNST4
+!$OMP ATOMIC
                  AVT(M) = AVT(M) + CNST5
+!$OMP ATOMIC
                  AVT(N) = AVT(N) + CNST5
               ELSE
+!$OMP ATOMIC
                  AVN(M) = AVN(M) + CNST7
+!$OMP ATOMIC
                  AVN(N) = AVN(N) + CNST7
               ENDIF
 
@@ -1003,17 +1122,22 @@
          ENDIF
 
 !!   Face length is always added even for boundary face.  JGLi03Jun2016
+!$OMP ATOMIC
          SLY(M) = SLY(M) + CNST2
+!$OMP ATOMIC
          SLY(N) = SLY(N) + CNST2
 
        END DO
+!$OMP END Parallel DO
  
 !  Assign averaged side-gradient to DHDX and DHDY, including polar cells. 
 !  Because SLX/Y add each face length twice, it already contains a factor 2.
+!$OMP  Parallel DO Default(Shared), Private(n)
        DO n = 1, NC
           DHDX(n)= AUN(n)/SLX(n) + AVT(n)/SLY(n)
           DHDY(n)= AUT(n)/SLX(n) + AVN(n)/SLY(n)
        ENDDO
+!$OMP END Parallel DO
 
 ! 999  PRINT*, ' Sub DHDXDHDY ended.'
 
@@ -1028,8 +1152,10 @@
        SUBROUTINE UVNTerpo
        USE SWEsCnstMD
        IMPLICIT NONE
-       REAL:: CNST, CNST0,CNST1,CNST2,CNST3,CNST4,CNST5,CNST6,CNST7,CNST8,CNST9
+       REAL:: CNST, CNST0,CNST1,CNST2,CNST3,CNST4,CNST5,CNST6,CNST7
        REAL:: AUN(NU), AUT(NU), AVN(NV), AVT(NV)  
+
+!      PRINT*, ' Sub UVNTerpo started.'
 
 !!  Cell centre velocities are in conventional unit of m s-1 
 !!  but face normal velocities are in unit of basic cell grid speed or 
@@ -1060,6 +1186,7 @@
 !!  zero normal velocity for such dry cell face.  JGLi21Nov2019
 
 !!   Use the face arrays to calculate centre to U-face interpolation.
+!$OMP Parallel DO Private(i,M,N,CNST0,CNST1,CNST2,CNST3,CNST4,CNST5)
        DO i=1, NU
 
 !    Select Central and Downstream cells
@@ -1118,9 +1245,12 @@
          ENDIF
 
        END DO
+!$OMP END Parallel DO
 
+!      PRINT*, ' Sub UVNTerpo U-loop done.'
 
 !!   Use the face arrays to calculate centre to V-face interpolation.
+!$OMP Parallel DO Private(j,M,N,CNST0,CNST1,CNST2,CNST3,CNST4,CNST5)
        DO j=1, NV
 
 !    Select Central and Downstream cells
@@ -1175,20 +1305,22 @@
          ENDIF
   
        END DO
+!$OMP END Parallel DO
 
 !!  Cell centre velocity at local east direction UCL for advective flux.
 !!  Advective U-flux (and hence UCL) at polar cells are not required.
+!$OMP Parallel DO Private(j,M,N,CNST0)
        DO k=1, NC-NPol
 
-           CNST9= CNST6/CCLat( 2*ICE(2,k)+ICE(4,k) )
+           CNST0= CNST6/CCLat( 2*ICE(2,k)+ICE(4,k) )
            IF(k .GT. NGLo) THEN
-               UCL(k)= ( UC(k)*CSAnC(k) + VC(k)*SNAnC(k) )*CNST9
+               UCL(k)= ( UC(k)*CSAnC(k) + VC(k)*SNAnC(k) )*CNST0
            ELSE
-               UCL(k)= UC(k)*CNST9
+               UCL(k)= UC(k)*CNST0
            ENDIF
 
        END DO
-
+!$OMP END Parallel DO
 
 ! 999  PRINT*, ' Sub UVNTerpo ended.'
 
@@ -1216,6 +1348,7 @@
        VTDX = 0.0
 
 !!  Loop over U face to calculate UT.dy of the curl operation
+!$OMP Parallel DO Private(i, M, N)
        DO i=1, NU
 
 !    Select Central and Downstream cells
@@ -1226,12 +1359,16 @@
            FU(i)=UT(i)*ISD(3,i)
 
 !    Store sub-section UT*dy in two neighbouring cells
+!$OMP ATOMIC
            UTDY(M) = UTDY(M) + FU(i)
+!$OMP ATOMIC
            UTDY(N) = UTDY(N) - FU(i)
 
        ENDDO
+!$OMP END Parallel DO
 
 !!  Loop over V face to calculate VT.dx of the curl operation
+!$OMP Parallel DO Private(j, M, N)
        DO j=1, NV
 
 !    Select Central and Downstream cells
@@ -1242,15 +1379,19 @@
            FV(j)=VT(j)*JSD(3,j)*CSLat( JSD(2,j) )
 
 !    Store sub-section VT*dx in two neighbouring cells
+!$OMP ATOMIC
            VTDX(M) = VTDX(M) - FV(j)
+!$OMP ATOMIC
            VTDX(N) = VTDX(N) + FV(j)
 
        ENDDO
+!$OMP END Parallel DO
 
 !    Initialise all vorticity to be zero
        Vort=0.0
 
 !!   Loop over cell to calculate absolute vorticity, 
+!$OMP Parallel DO Private(n)
        DO n=1, NC-NPol
 
 !    Keep vorticity to be zero if Hw = 0.   JGLi03Feb2016
@@ -1260,6 +1401,7 @@
          ENDIF
 
        END DO
+!$OMP END Parallel DO
       
 !!   Polar cells are linkec by V-faces only. It is DY in radius
 !!   Addd condition Hw > 0.  JGLi03Feb2016
@@ -1315,7 +1457,8 @@
        CNST0 = DX0*DY
        CNST1 = 0.0
 
-!!  Loop over U face to calculate UT.dy of the curl operation
+!!  Loop over all cells except for Polar cells for integration.
+!$OMP Parallel DO Private(i, CNST3, CNST4)
        DO i=1, NC-NPol
 
 !    Cell sizes and area in radian square
@@ -1323,10 +1466,13 @@
           CNST4=CNST3*CCLat( 2*ICE(2,i)+ICE(4,i) )
 
 !    Integral field over each cell
+!$OMP ATOMIC
           CNST1 = CNST1 + Fild(i)*CNST4
 
        ENDDO
+!$OMP END Parallel DO
 
+!!  Polar cells requires a round patch area.
        IF( NPol .GT. 0 ) THEN
           CNST5=PCRDY*DY*Real( ICE(4,NNor) )
           CNST6=Pie*CNST5*CNST5
@@ -1386,6 +1532,7 @@
        CNST0 = DX0*DY
 
 !!  Loop over U face to calculate UT.dy of the curl operation
+!$OMP Parallel DO Private(i, M, CNST3, CNST4)
        DO i=1, NC-NPol
 
           FSqr(i) = FAbs(i)*FAbs(i)
@@ -1396,10 +1543,13 @@
           CNST4=CNST3*CCLat( 2*ICE(2,i)+ICE(4,i) )
 
 !    Error l1 and l2 top integration term 
+!$OMP ATOMIC
           CNST1 = CNST1 + FAbs(i)*CNST4
+!$OMP ATOMIC
           CNST2 = CNST2 + FSqr(i)*CNST4
 
        ENDDO
+!$OMP END Parallel DO
 
        IF( NPol .GT. 0 ) THEN
           CNST5=PCRDY*DY*Real( ICE(4,NNor) )
@@ -1591,7 +1741,7 @@
 
        ENDIF
 
- 999   PRINT*, ' Sub READCELL ended.'
+! 999  PRINT*, ' Sub READCELL ended.'
 
        RETURN
 
@@ -1631,6 +1781,11 @@
               WRITE(6, *) "JNMn JNMx =",JNMn,JNMx
            END IF
         END IF
+!$OMP Parallel
+!! !$    CALL OMP_SET_NUM_THREADS(2)
+!$    WRITE(6,*) "Num_Threads =",  omp_get_num_threads()
+
+!$OMP Sections  Private(I, J, M, N)
 
 !!  Deduct all face array boundary cell index by -1. 
         DO N=1,NU
@@ -1639,44 +1794,61 @@
         END DO
         END DO
 
+!$OMP  Section
+
         DO M=1, NV
         DO J=4,7
            IF( JSD(J,M) <= 0 ) JSD(J,M) = JSD(J,M) - 1 
         END DO
         END DO
 
+!$OMP End Sections
+!$OMP Barrier
+
 !! Assign north polar link boundary cells to be 0
         IJK = 0
         IF( Arctic ) THEN
+!$OMP Parallel DO Private(M)
            DO M=1, NV
               IF( JSD(2,M) .EQ. JNMx .AND. JSD(6,M) < 0 ) THEN
                   JSD(6,M) = 0 
                   JSD(7,M) = 0 
+!$OMP ATOMIC
                   IJK = IJK + 1
               ELSE IF( JSD(2,M) .EQ. JNMn .AND. JSD(5,M) < 0 ) THEN
                   JSD(5,M) = 0 
                   JSD(4,M) = 0 
+!$OMP ATOMIC
                   IJK = IJK + 1
               ENDIF 
            END DO
+!$OMP END Parallel DO
+
 !! Assign south polar linking boundary cells as well
            IF( NPol .EQ. 2 ) THEN
+!$OMP Parallel DO Private(M)
               DO M=1, NV
               IF( JSD(2,M) .EQ. JSMx .AND. JSD(6,M) < 0 ) THEN
                   JSD(6,M) = 0 
                   JSD(7,M) = 0 
+!$OMP ATOMIC
                   IJK = IJK + 1
               ELSE IF( JSD(2,M) .EQ. JSMn .AND. JSD(5,M) < 0 ) THEN
                   JSD(5,M) = 0 
                   JSD(4,M) = 0 
+!$OMP ATOMIC
                   IJK = IJK + 1
               ENDIF 
               END DO
+!$OMP END Parallel DO
            ENDIF 
            WRITE(6,*) " Number of polar boundary cells adjusted =", IJK
         ENDIF 
 
- 999   PRINT*, ' Sub ArctLink ended.'
+!!    End of parallel sessions.   JGLi02Feb2024
+!$OMP End Parallel
+
+! 999  PRINT*, ' Sub ArctLink ended.'
 
        RETURN
 
@@ -1700,6 +1872,7 @@
       ALLOCATE( XLon(NUAr), WLat(NUAr), ELon(NUAr), ELat(NUAr), AnglD(NUAr) )
       WRITE(6,*) " Calculating U component ..."
 
+!$OMP Parallel DO Private(i, L)
       DO L=1, NUAr
          i=L+NUGL 
 !!  U-face latitude with half dlat increase from SW corner
@@ -1709,40 +1882,47 @@
          WLat(L)= Float( ISD(2,i) )*DLat + Float( ISD(3,i) )*CNST2 + ZLat
 
       END DO
+!$OMP END Parallel DO
 
 !!  Convert standard lat/lon into rotated lat/lon for deformation wind
       CALL LLTOEQANGLE( WLat, XLon, ELat, ELon,     &
      &                 AnglD, DfPolat, DfPolon, NUAr)
 
+!$OMP Parallel DO Private(i, L)
       DO L=1, NUAr
          i=L+NUGL 
 !!  Convert the AnglD into rad and store SIN/COS. 
          CSAnU(i)=COS( AnglD(L)*D2RAD ) 
          SNAnU(i)=SIN( AnglD(L)*D2RAD ) 
       END DO
+!$OMP END Parallel DO
 
       DEALLOCATE( XLon, WLat, ELon, ELat, AnglD )
 
         ALLOCATE( XLon(NVAr), WLat(NVAr), ELon(NVAr), ELat(NVAr), AnglD(NVAr) )
 
 !     Work out v-face central position XLon, WLat in standard grid
+!$OMP Parallel DO Private(j, L)
       DO L=1, NVAr
          j=L+NVGL
 !!  V-face latitude is the same as its SW corner point.
          XLon(L)= Float( JSD(1,j) )*DLon + CNST1*Float( JSD(3,j) ) + ZLon
          WLat(L)= Float( JSD(2,j) )*DLat + ZLat
       END DO
+!$OMP END Parallel DO
 
 !!  Convert standard lat/lon into rotated lat/lon for deformation wind
       CALL LLTOEQANGLE( WLat, XLon, ELat, ELon,     &
      &                 AnglD, DfPolat, DfPolon, NVAr)
 
+!$OMP Parallel DO Private(j, L)
       DO L=1, NVAr
          j=L+NVGL
 !!  Convert the AnglD into rad and store SIN/COS 
          CSAnV(j)=COS( AnglD(L)*D2RAD ) 
          SNAnV(j)=SIN( AnglD(L)*D2RAD ) 
       END DO
+!$OMP END Parallel DO
 
       DEALLOCATE( XLon, WLat, ELon, ELat, AnglD )
 
@@ -1756,6 +1936,7 @@
 !! All cells include the polar cells (NPol).
 !! Note the wlat is not at 90N for the polar cell as direction will be undefined.
 !! Here Wlat is half dlat from the polar cell edge and half dlat from the NP.
+!$OMP Parallel DO Private(i, L)
       DO L=1, NArc-NPol
          i=L+NGLo
 
@@ -1767,6 +1948,7 @@
          WLat(L)= Float( ICE(2,i) )*DLat + CNST2*Float( ICE(4,i) ) + ZLat
 
       END DO
+!$OMP END Parallel DO
 
 !! AnglD will be undefined at poles as no local east at poles.  So polar
 !! cell centres are shifted half-grid length off the Poles.
@@ -1782,6 +1964,7 @@
       CALL LLTOEQANGLE( WLat, XLon, ELat, ELon,     &
      &                 AnglD, DfPolat, DfPolon, NArc )
 
+!$OMP Parallel DO Private(i, L)
       DO L=1, NArc
          i=L+NGLo
 !!  Keep the AnglD in Deg and store in AngCD(L).  Spectral rotation for
@@ -1790,6 +1973,7 @@
          CSAnC(i)=COS( AnglD(L)*D2RAD ) 
          SNAnC(i)=SIN( AnglD(L)*D2RAD ) 
       END DO
+!$OMP END Parallel DO
 
 !!  Output AngCD for checking
 !     WRITE(6,        *)  "(AngCD(L+NGLo), L=1, NArc)"
@@ -1829,7 +2013,7 @@
        PRINT*, ' Boundary cells matched for', NGLB, NArB
 
 
- 999   PRINT*, ' Sub ArctAngd ended.'
+! 999  PRINT*, ' Sub ArctAngd ended.'
 
       RETURN
 
@@ -1853,6 +2037,7 @@
         IF(nn /= 0) PRINT*,' File FL9NM was not opened! '
         WRITE(UNIT=6,FMT='(2x,"NT= ",i8,3x,A)') NTSP, FL9NM
 
+!$OMP Parallel DO Private(i)
         DO i=1, NC
            D(i) = CWrt(i)
 !!   Filter very small CWrt value so it is greater than E-90
@@ -1865,6 +2050,8 @@
            ENDIF
 
         ENDDO
+!$OMP END Parallel DO
+
 
 !    All cells are saved 
         WRITE(UNIT=26, FMT='(2x,2i8)' )  NTSP, NC
@@ -1895,6 +2082,7 @@
         IF(nn /= 0) PRINT*,' File FL9NM was not opened! '
         WRITE(UNIT=6,FMT='(2x,"NT= ",i8,3x,A)') NTSP, FL10NM
 
+!$OMP Parallel DO Private(i)
         DO i=1, NC
            A(i) = UCwt(i)
            D(i) = VCwt(i)
@@ -1913,6 +2101,7 @@
                D(i)=SIGN(9.99E90, VCwt(i))
            ENDIF
         ENDDO
+!$OMP END Parallel DO
 
 !    All cells are saved 
         WRITE(UNIT=26, FMT='(2x,3i8)' )  NTSP, NC, 2
@@ -1975,4 +2164,4 @@
 !/ End of module SWEsDynaMD. ------------------------------------------/
 !/
        END MODULE SWEsDynaMD
-!
+! 

@@ -117,11 +117,22 @@
 !!
 !! Modified to merge all SWEs tests into a single model.  JGLi20Jul2022 
 !!
+!! Add selected point output for tsunami simulations.     JGLi28Dec2023 
+!!
+!! Parallelization of SWEs model with OpenMP directives.  JGLi06Feb2024 
+!!
+!! Replace GmDT with bottom friction coefficent CBFr.     JGLi20Mar2024 
+!!
+!! Separate potential and kinetic energy integrations.    JGLi25Jul2024 
+!!
 
       PROGRAM SWEsnSMC 
        USE SWEsCnstMD
        USE SWEsInitMD
        USE SWEsDynaMD
+!/ Use omp_lib for OpenMP functions if switched on.   JGLi02Feb2024
+!$       USE omp_lib
+
        IMPLICIT NONE
 
        REAL:: CNST, CNST1, CNST2, CNST3, CNST4, CNST5, CNST6, CNST8
@@ -153,15 +164,18 @@
          WRITE(6,*)   NTS,  NWP,  NHrg, NLrg
           READ(8,*)   ZLon, ZLat, DLon, DLat
          WRITE(6,*)   ZLon, ZLat, DLon, DLat
-          READ(8,*)   DTG,  DT,   AKH,  GmDT
-         WRITE(6,*)   DTG,  DT,   AKH,  GmDT
+          READ(8,*)   DFR0, DT,   AKHM, CBFr
+         WRITE(6,*)   DFR0, DT,   AKHM, CBFr
           READ(8,*)   PLon, PLat, PAvr, Beta
          WRITE(6,*)   PLon, PLat, PAvr, Beta
-          READ(8,*)   Arctic, Source, Restrt
-         WRITE(6,*)   Arctic, Source, Restrt
+          READ(8,*)   Arctic, Source, WHPrts, Restrt
+         WRITE(6,*)   Arctic, Source, WHPrts, Restrt
 
        CLOSE(8)
  
+!!  Substitue DFR0 for unused DTG as input and rescale if it is > 1.0. 
+!!  It starts diffusion ramping with initial value of DFR0*AKHM.  JGLi16May2025
+       IF( DFR0 > 1.0 ) DFR0 = 1.0
 
 !!  Allocate cell and face arrays.
        ALLOCATE( ICE(4,-9:NCL), ISD(1:7,NFC), JSD(1:7,NFC), KG(NCL) )
@@ -225,18 +239,24 @@
 
 !!  Convert diffusivity into radian^2 s-1 and multiply by 2*DT
 !!  The 2.0 factor is added to cancel the 0.5 factor in the gradient.
-        AKHDT2 = 2.0*AKH*DT/(REARTH*REARTH)
+!!  Ramp factor is introduced to reduce the diffusivity in early hours
+!!  with initial value at DFR0 times of the maximum one.  JGLi09Aug2024
+        AKHDMX= 2.0*AKHM*DT/(REARTH*REARTH)
+        AKHDT2= DFR0*AKHDMX 
 
 !!  Allocate some working variables with MOLD option.
-        ALLOCATE( C(-9:NCL) )
-        ALLOCATE( A, D, F, Hw, AU, AV, DX, DXR, UC, VC,   &
-                  Hw0, UC0, VC0, Entt, Btm, CSAnC, SNAnC, & 
-                  CoriF, Vort, Enkn, DHDX, DHDY, HCel,    &
-                  AngCD, UCL, UCS, VCS,  MOLD=C )
+        ALLOCATE( A(-9:NCL),  C(-9:NCL),  D(-9:NCL),  F(-9:NCL), &
+                 Hw(-9:NCL), AU(-9:NCL), AV(-9:NCL), DX(-9:NCL), &
+                DXR(-9:NCL), UC(-9:NCL), VC(-9:NCL),Hw0(-9:NCL), &
+              CSAnC(-9:NCL),UC0(-9:NCL),VC0(-9:NCL),Btm(-9:NCL), &
+              SNAnC(-9:NCL),UCL(-9:NCL),UCS(-9:NCL),VCS(-9:NCL), &
+              CoriF(-9:NCL),Vort(-9:NCL),Enkn(-9:NCL),BFrc(-9:NCL), & 
+              AngCD(-9:NCL),DHDX(-9:NCL),DHDY(-9:NCL),HCel(-9:NCL), & 
+               Enpt(-9:NCL),EnkH(-9:NCL) )
 
-        ALLOCATE( U(NFC) )
-        ALLOCATE( UT, V, VT, FU, FV, FX, FY,              &
-                  CSAnU, SNAnU, CSAnV, SNAnV, MOLD=U )
+        ALLOCATE( U(NFC), UT(NFC),  V(NFC), VT(NFC),  &
+                 FU(NFC), FV(NFC), FX(NFC), FY(NFC),  &
+              CSAnU(NFC), SNAnU(NFC), CSAnV(NFC), SNAnV(NFC) )
 
 !   Whole array assignment for i=-8,NCL
         C=0.0
@@ -244,7 +264,8 @@
 !!  Default ocean floor bottom altitude at -KG    JGLi06Jun2016
         Btm = 0.0
         Btm(1:NC) = - FLOAT( KG(1:NC) )
-        WRITE(6,FMT='(" Maximum cell height  Btm(1:NC)=",f8.1)') MAXVAL(Btm(1:NC))
+        WRITE(6,FMT='(" Maximum water depth -Btm(1:NC)=",f8.1)') MAXVAL(-Btm(1:NC))
+        WRITE(6,FMT='(" Maximum height above sea level=",f8.1)') MAXVAL( Btm(1:NC))
         WRITE(6,FMT='(" Boundary cell Btm(-9:0)=",10f5.1)') Btm(-9:0)
 
 !!  Multiple factor for multi-resolution loops
@@ -264,10 +285,22 @@
         SNAnU=0.0
         SNAnV=0.0
 
+
 !  Generate flux face and cell rotation Angle for Arctic cells
         IF( Arctic ) THEN
             ALLOCATE( MBGLo(NGLB), MBArc(NArB) )
             CALL ArctAngd
+        ENDIF
+
+!  Read selected points cell IDs from WHCellIDs.txt.
+        IF( WHPrts ) THEN
+        OPEN(UNIT=9,FILE='WHPrtsID.txt',STATUS='OLD',IOSTAT=nn,ACTION='READ')
+        IF(nn /= 0) PRINT*,' *** WHPrtsID.txt was not opened! '
+        READ(9, *) NPrt 
+        ALLOCATE( IDPrt(NPrt) )
+        READ(9,*) IDPrt 
+        WRITE(6,*) ' Water height difference output at points of NPrt=', NPrt
+        CLOSE(9)
         ENDIF
 
 !  Initialise cell centre velocity and water height fields.
@@ -278,13 +311,20 @@
           CASE( 2 )
               CALL W2HfUCVC
           CASE( 3 )
-              CALL TsunamHw
-          CASE( 4 )
-              CALL GsHfUCVC
-          CASE( 5 ) 
+              CALL GsHfUCVC(3)
+          CASE( 4 ) 
               CALL W5HfUCVC
-          CASE( 6 ) 
+          CASE( 5 ) 
               CALL W6HfUCVC(0.0, Hw, UC, VC)
+          CASE( 6 )
+              CALL TsunamiS
+          CASE( 7 )
+              CALL TsunamiS
+              CALL WRITEOUT(A, 0, 'Ds')
+          CASE( 8 )
+              CALL TsunCanr
+          CASE( 9 )
+              CALL GsHfUCVC(0)
           CASE Default
               CALL INITUCVC
         END SELECT
@@ -324,15 +364,22 @@
 
 !  Calculate initial potential energy integration with Enkn = 0. 
         Enkn = 0.0
+!  First excluded initial disturbances by swith to flat surface.
+        Hw = -Btm 
         CALL TotlEngy 
-        CALL Integral( Entt, Entgrl )
+        CALL Integral( Enpt, Entgrl )
         Enpt0 = Entgrl
+!  Then restore initial disturbance back inot Hw.  JGLi22Jul2024
+        Hw = Hw0
 
-! Calculate initial total energy and substract Enpt0
+! Calculate initial total potential energy and substract Enpt0
         CALL KinetcEn(UC0, VC0)
         CALL TotlEngy 
-        CALL Integral( Entt, Entgrl )
+        CALL Integral( Enpt, Entgrl )
         Enetp = Entgrl - Enpt0
+! Calculate initial total kinetic energy, which should be zero if EnkH=0.
+        CALL Integral( EnkH, Entgrl )
+        Enetk = Entgrl 
 
 ! Calculate bathymetry gradient without kinetic energy
         Enkn = 0.0
@@ -370,8 +417,8 @@
         &  "  Spherical Multiple-Cell Shallow Water Equation Model" /    &
         &  "         SMC Version 3.0   J G  Li  Feb 2018  " /)' )
 
-       CALL DATE_AND_TIME(CDate, CTime)
-       WRITE(UNIT=16,FMT="(1x,' Run time date ',A10,2x,A10)") CTime, CDate
+       CALL DATE_AND_TIME(CDate, STime)
+       WRITE(UNIT=16,FMT="(1x,' Run start time date ',A10,2x,A10)") STime, CDate
 
        WRITE(UNIT=16,FMT='(1x," Lon/Lat/NPol grid No.s = ",3i8)')  NLon, NLat, NPol
        WRITE(UNIT=16,FMT='(1x," Size-1 Units DLON DLAT = ",2f14.10)')  DLON, DLAT
@@ -381,12 +428,14 @@
        WRITE(UNIT=16,FMT='(1x," Polar averge lat and j = ",f8.2,i8)') PAvr, JPvrg
        WRITE(UNIT=16,FMT='(1x," Averg intrvl NHrg NLrg = ",2i8)' )    NHrg,   NLrg 
        WRITE(UNIT=16,FMT='(1x," Angular speed36h, GmDT = ",ES12.3,f8.4)' ) Agu36, GmDT
-       WRITE(UNIT=16,FMT='(1x," Horiz. diffusvty, beta = ",ES12.3,f8.4)' )  AKH,  Beta
-       WRITE(UNIT=16,FMT='(1x," Maximum x-Fourier Nmbr = ",ES12.3,f8.4)' )  AKHDT2*2.0/(DX0*DX0*MFct)
-       WRITE(UNIT=16,FMT='(1x," Maximum y-Fourier Nmbr = ",ES12.3,f8.4)' )  AKHDT2*0.5*DYR*DYR/MFct
+       WRITE(UNIT=16,FMT='(1x," Maximum x-Fourier Nmbr = ",ES12.3,f8.4)' )  AKHDMX*2.0/(DX0*DX0*MFct)
+       WRITE(UNIT=16,FMT='(1x," Maximum y-Fourier Nmbr = ",ES12.3,f8.4)' )  AKHDMX*0.5*DYR*DYR/MFct
+       WRITE(UNIT=16,FMT='(1x," Horiz. diffusvty, beta = ",ES12.3,f8.4)' )  AKHM, Beta
+       WRITE(UNIT=16,FMT='(1x," Initial diff DFR0,DFHr = ",2f8.3)' )  DFR0, DFHr
        WRITE(UNIT=16,FMT='(1x," Basic/Frac timestep (s)= ",2f8.1)' )  DT, Frct*DT
        WRITE(UNIT=16,FMT='(1x," Maximum grid speed s-1 = ",ES12.3)') UMX
        WRITE(UNIT=16,FMT='(1x," Maximum Courant number = ",ES12.3)') CMX
+       WRITE(UNIT=16,FMT='(1x," Initial total energy   = ",ES12.3)') Enpt0
        WRITE(UNIT=16,FMT='(1x," Total write time steps = ",2i8)')  NTS, NWP
        WRITE(UNIT=16,FMT='(1x," Start step & test case = ",2i8)' )  NS, Init
        WRITE(UNIT=16,FMT='(1x," Multi-reso levl factor = ",2i8)')  MRL, MFct
@@ -403,15 +452,16 @@
        WRITE(UNIT=16,FMT='(1x," Sub-step Vfce count NRLVFc(0:MRL)=",i3,6i8)') NRLVFc
        IF( Arctic ) WRITE(UNIT=16,FMT='(i3," polar parts included.")') NPol
        IF( Source ) WRITE(UNIT=16,FMT='("  Source cells No. =",i8 )') NSCR
+       IF( WHPrts ) WRITE(UNIT=16,FMT='("  WHPrts cells No. =",i8 )') NPrt
        IF( Restrt ) WRITE(UNIT=16,FMT='("  Model restarts at=",i8 )') NS  
 
  3912 FORMAT(1x,i4,3F9.1,ES12.3)
 
-       WRITE(16,FMT='(/1x," YS/CS/CC/BS2Lat at step of  ",i6)' )  10
-       WRITE(16,FMT='(8F9.3)')  (YSLat(n), n=-NLat2,NLat2,10)
-       WRITE(16,FMT='(8F9.5)')  (CSLat(n), n=-NLat2,NLat2,10)
-       WRITE(16,FMT='(8F9.5)')  (CCLat(n), n=-NLat, NLat, 20)
-       WRITE(16,FMT='(8F9.5)') (BS2Lat(n), n=-NLat, NLat, 20)
+       WRITE(16,FMT='(/1x," YS/CS/CC/BS2Lat at step of  ",i6)' )  100
+       WRITE(16,FMT='(8F9.3)')  (YSLat(n), n=-NLat2,NLat2,100)
+       WRITE(16,FMT='(8F9.5)')  (CSLat(n), n=-NLat2,NLat2,100)
+       WRITE(16,FMT='(8F9.5)')  (CCLat(n), n=-NLat, NLat, 200)
+       WRITE(16,FMT='(8F9.5)') (BS2Lat(n), n=-NLat, NLat, 200)
        WRITE(16,FMT='(/1x," First and last ICE values ")' ) 
        WRITE(16,FMT='(1x,6i8)')  1,(ICE(i, 1),i=1,4)
        WRITE(16,FMT='(1x,6i8)') NC,(ICE(i,NC),i=1,4)
@@ -423,6 +473,12 @@
        WRITE(16,FMT='(1x,9i8)') NV,(JSD(i,NV),i=1,7)
        WRITE(16,FMT='(1x)') 
 
+!! Open a file to store error messages if any.
+       OPEN(UNIT=17,FILE='CErros.txt',STATUS='UNKNOWN',IOSTAT=nn, &
+        &           ACTION='WRITE')
+       IF(nn /= 0) PRINT*,' File CErros.txt was not opened! '
+       WRITE(17,FMT='(1x," Message to recode number of negative water heights removed.")' )
+
 !! Open a file to store individal terms for selected point
        OPEN(UNIT=18,FILE='CTerms.txt',STATUS='UNKNOWN',IOSTAT=nn, &
         &           ACTION='WRITE')
@@ -432,28 +488,38 @@
        CNST1 = (ICE(1,n)+0.5*ICE(3,n))*DLon + ZLON
        CNST2 = (ISD(2,n)+0.5*ICE(4,n))*DLat + ZLat
        WRITE(18,FMT='(1x,6i8, 2F9.3)') n, (ICE(i,n), i=1,4), KG(n), CNST1, CNST2
-       WRITE(18,FMT='(1x," TimeStep,  Vorticity,  GradientX,  GradientY",  &
-      &                  ", Water Ht m, Velocity U, Velocity V")')  
+       WRITE(18,FMT='(" TimeStep, Vorticity, GradientX, GradientY",  &
+      &                  ", WaterHt m, VelocityU, VelocityV")')  
 
 !  Output exact terms at 0 time step. 
-       WRITE(18,FMT='(1x,i9, 6ES12.3)') 0, (Terms(i), i=1,6) 
+       WRITE(18,FMT='(i9, 6ES11.3)') 0, (Terms(i), i=1,6) 
 
 !! Open a file to store error l1 l2 and lmx for Hw U and V fields. 
        OPEN(UNIT=19,FILE='CEl12m.txt',STATUS='UNKNOWN',IOSTAT=nn, &
         &           ACTION='WRITE')
        IF(nn /= 0) PRINT*,' File CEl12m.txt was not opened! '
 
-       WRITE(19,FMT='("  NT  HEl12m(3)  UEl12m(3)  VEl12m(3)  Enetp  Hwint  Vrint ")')
+       WRITE(19,FMT='("  NT  HEl12m(3)  UEl12m(3)  VEl12m(3)  Enetp  Hwint  Vrint  Enetk ")')
 !  Output initial error norms at 0 time step. 
-       WRITE(19,FMT=9123) 0, HEl12m, UEl12m, VEl12m, Enetp, Hwint, Vrint 
- 9123  FORMAT (1x,i9, 12ES12.3)
+       WRITE(19,FMT=9123) 0, HEl12m, UEl12m, VEl12m, Enetp, Hwint, Vrint, Enetk 
+ 9123  FORMAT (1x,i9, 15ES12.3)
+
+!! Open a file to store water height at selected points if WHPrts is selected.
+       IF( WHPrts ) THEN
+         OPEN(UNIT=20,FILE='CWHPrt.txt',STATUS='UNKNOWN',IOSTAT=nn, &
+        &           ACTION='WRITE')
+         IF(nn /= 0) PRINT*,' File CWHPrt.txt was not opened! '
+
+         WRITE(20,FMT='((16i8))') NPrt, (IDPrt(i), i=1, NPrt)
+!  Output initial error norms at 0 time step. 
+         WRITE(20,FMT=8163) 0,(Hw(IDPrt(i))+MIN(Btm(IDPrt(i)),0.0),i=1,NPrt)
+       ENDIF
+ 8123  FORMAT (i8, (12ES11.3))
+ 8163  FORMAT (i8, (16F8.3))
 
 !     Start timing and major time step loop
        CALL DATE_AND_TIME(CDate, CTime)
        WRITE(6,"(' Loop start time ',A,'  ',A)")  CTime
-
-!!  Use a IJK count for first error output.
-       IJK=0
 
  TSLoop:  DO  NT=NS+1, NS+NTS
 
@@ -515,23 +581,27 @@
 !  Filter out NaN UC VC if any.  JGLi26Jul2022
         ii=0
         jj=0
+!$OMP Parallel DO Private(i)
         DO i = 1, NC
            IF( UC(i) .NE. UC(i) ) THEN
                UC(i) = UC0(i)
                IF(MOD(NT-1,5*NWP) == 0) WRITE(18,'(" U",6i6)') ICE(:,i),KG(i)
+!$OMP ATOMIC
                ii = ii + 1
            ENDIF
            IF( VC(i) .NE. VC(i) ) THEN
                VC(i) = VC0(i)
                IF(MOD(NT-1,5*NWP) == 0) WRITE(18,'(" V",6i6)') ICE(:,i),KG(i)
+!$OMP ATOMIC
                jj = jj + 1
            ENDIF
         ENDDO
+!$OMP END Parallel DO
+
 !! Warning if any NaN velocity components appeared.
         IF( ( NT < NWP .OR. MOD(NT,NWP) .eq. 0 ) .AND. ( ii > 0 .OR. jj > 0 ) ) THEN
-            WRITE(6, *) " U V NaN ii, jj at NT =", ii, jj, NT
+!           WRITE(6, *) " U V NaN ii, jj at NT =", ii, jj, NT
             WRITE(18,*) " U V NaN ii, jj at NT =", ii, jj, NT
-            IJK = IJK + 1
         ENDIF
 
 !  Output water height if at selected writeup time steps
@@ -541,22 +611,24 @@
       & .OR. (MOD(NT,4*NWP) .eq. 0) )  THEN
             A = Hw +Btm 
             CALL WRITEOUT(A, NT, 'Hb')
-!  Relative vorticity output
-            A = (Vort - CoriF)/DT
-            CALL WRITEOUT(A, NT, 'Vr')
+!  Relative vorticity output for case 3
+            IF( Init .EQ. 3 .OR. Init .EQ. 9 ) THEN
+              A = (Vort - CoriF)/DT
+              CALL WRITEOUT(A, NT, 'Vr')
+            ENDIF
         ENDIF
 
 !  Save UC VC every 4 NWP times.
-        IF( MOD(NT, 4*NWP) .eq. 0 )   &
-            CALL WRITEUVs(UC, VC, NT)
+!       IF( MOD(NT, 4*NWP) .eq. 0 )   &
+!           CALL WRITEUVs(UC, VC, NT)
 
 !  Output terms at every time step. 
-        WRITE(18,FMT='(1x,i9, 6ES12.3)') NT, (Terms(i), i=1,6) 
+        WRITE(18,FMT='(i9, 6ES11.3)') NT, (Terms(i), i=1,6) 
 
-!  Calculate errors l1 l2 and lmax and output every NLrg average time.
-        IF( MOD(NT, NLrg) .eq. 0 )   THEN 
-!! Calculate rotated initial field for W6 test before error norms.
-            IF( Init .EQ. 6 ) THEN
+!  Calculate errors l1 l2 and lmax and output every 6 timesteps.
+        IF( MOD(NT, 6) .eq. 0 )   THEN 
+!! Calculate rotated initial field for W6 test (Case 5) before error norms.
+            IF( Init .EQ. 5 ) THEN
           CALL W6HfUCVC(NT*DT, Hw0, UC0, VC0)
             ENDIF
 !! Calculate integraton of field differences from initial fields.
@@ -564,10 +636,12 @@
           CALL Errol12m(UC-UC0, UEl12m)
           CALL Errol12m(VC-VC0, VEl12m)
 
-!! Calculate total energy and integration. 
+!! Calculate total potential and kinetic energy and integration. 
           CALL TotlEngy
-          CALL Integral( Entt, Entgrl )
+          CALL Integral( Enpt, Entgrl )
           Enetp = Entgrl - Enpt0
+          CALL Integral( EnkH, Entgrl )
+          Enetk = Entgrl 
 
 !! Total water volume integration.
           CALL Integral( Hw, Hwint )
@@ -576,23 +650,36 @@
           A = (Vort - CoriF)/DT
           CALL Integral(A, Vrint)
 
-          WRITE(19,FMT=9123) NT, HEl12m, UEl12m, VEl12m, Enetp, Hwint, Vrint 
+          WRITE(19,FMT=9123) NT, HEl12m, UEl12m, VEl12m, Enetp, Hwint, Vrint, Enetk 
+
+!  Update AKHDT2 with ramp factor upto 24*Mhr.   JGLi09Aug2024
+!         CNST = 0.4+0.6*NT/FLOAT(24*MHr)
+!         AKHDT2 = MIN(1.0, CNST)*AKHDMX
+!!  Use new diffusivity initial ratio and increase time scale.  JGLi23Sep2024
+          AKHDT2 = AKHDMX*( 1.0 - (1.0-DFR0)*EXP(-NT/(DFHr*MHr)) )
+
+        ENDIF
+
+        IF( WHPrts .AND. MOD(NT, 2) .eq. 0 )  THEN 
+          WRITE(20,FMT=8163) NT,(Hw(IDPrt(i))+MIN(Btm(IDPrt(i)),0.0),i=1,NPrt)
         ENDIF
 
 !!  End of time step loop
       ENDDO  TSLoop
 
        CALL DATE_AND_TIME(CDate, CTime)
-       WRITE(6,"(' Loop ended time ',A,'  ',A)")  CTime
-
-       CALL DATE_AND_TIME(CDate, CTime)
-       WRITE(UNIT= 6,FMT="(1x,' End time date ',A10,2x,A10)") CTime, CDate
-       WRITE(UNIT=16,FMT="(1x,' End time date ',A10,2x,A10)") CTime, CDate
+       READ(STime, *) CNST1
+       READ(CTime, *) CNST6
+       CNST = CNST6 - CNST1 
+       WRITE(UNIT= 6,FMT="(1x,' End time date ',A10,2x,A10,F12.1)") CTime, CDate, CNST 
+       WRITE(UNIT=16,FMT="(1x,' End time date ',A10,2x,A10,F12.1)") CTime, CDate, CNST 
 
 !  Close output files
        CLOSE(16)
+       CLOSE(17)
        CLOSE(18)
        CLOSE(19)
+       CLOSE(20)
 
        WRITE(UNIT= 6,FMT="(1x,' SWEsnSMC completed!')") 
 
